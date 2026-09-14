@@ -4,17 +4,17 @@ namespace CodexUsageWidget;
 
 internal sealed class FloatingWidgetForm : Form
 {
-    private const int WidgetWidth = 258;
-    private const int WidgetHeight = 76;
+    private const int MetricWidth = 94;
     private const int ScreenMargin = 18;
 
-    private readonly Label _statusLabel = new();
+    private readonly CodeIconControl _codeIcon = new();
     private readonly Label _fiveHourValue = new();
     private readonly Label _weeklyValue = new();
     private readonly Label _fiveHourReset = new();
     private readonly Label _weeklyReset = new();
     private readonly ToolTip _toolTip = new();
     private readonly ToolStripMenuItem _alwaysOnTopItem;
+    private readonly ContextMenuStrip _menu;
 
     private UsageSnapshot? _snapshot;
     private bool _allowClose;
@@ -34,18 +34,16 @@ internal sealed class FloatingWidgetForm : Form
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
         TopMost = true;
-        Width = WidgetWidth;
-        Height = WidgetHeight;
-        MinimumSize = new Size(WidgetWidth, WidgetHeight);
-        MaximumSize = new Size(WidgetWidth, WidgetHeight);
         BackColor = Color.FromArgb(28, 28, 30);
         ForeColor = Color.White;
         Font = new Font("Segoe UI", 9f);
         AutoScaleMode = AutoScaleMode.Dpi;
-        Opacity = 0.97;
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        Opacity = 0.98;
 
-        var menu = new ContextMenuStrip();
-        menu.Items.Add("Refresh", null, (_, _) => RefreshRequested?.Invoke(this, EventArgs.Empty));
+        _menu = new ContextMenuStrip();
+        _menu.Items.Add("Refresh", null, (_, _) => RefreshRequested?.Invoke(this, EventArgs.Empty));
 
         _alwaysOnTopItem = new ToolStripMenuItem("Always on top")
         {
@@ -53,105 +51,66 @@ internal sealed class FloatingWidgetForm : Form
             CheckOnClick = true
         };
         _alwaysOnTopItem.CheckedChanged += (_, _) => SetAlwaysOnTop(_alwaysOnTopItem.Checked);
-        menu.Items.Add(_alwaysOnTopItem);
+        _menu.Items.Add(_alwaysOnTopItem);
 
-        menu.Items.Add("Reset position", null, (_, _) => ResetPosition());
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Open log", null, (_, _) => OpenLogRequested?.Invoke(this, EventArgs.Empty));
-        menu.Items.Add("Exit", null, (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty));
-        ContextMenuStrip = menu;
+        _menu.Items.Add("Reset position", null, (_, _) => ResetPosition());
+        _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add("Open log", null, (_, _) => OpenLogRequested?.Invoke(this, EventArgs.Empty));
+        _menu.Items.Add("Exit", null, (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty));
+        ContextMenuStrip = _menu;
 
         var root = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            Padding = new Padding(12, 8, 12, 7),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(10, 8, 10, 8),
             BackColor = BackColor,
-            ColumnCount = 1,
-            RowCount = 3,
+            ColumnCount = 4,
+            RowCount = 2,
             Margin = Padding.Empty
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 16));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 15));
 
-        var header = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
-            Margin = Padding.Empty,
-            BackColor = BackColor
-        };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, MetricWidth));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 1));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, MetricWidth));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var title = new Label
-        {
-            Text = "CODEX",
-            AutoSize = true,
-            ForeColor = Color.FromArgb(212, 212, 216),
-            Font = new Font("Segoe UI Semibold", 8f),
-            Margin = Padding.Empty,
-            Anchor = AnchorStyles.Left
-        };
+        ConfigureCodeIcon();
+        root.Controls.Add(_codeIcon, 0, 0);
+        root.SetRowSpan(_codeIcon, 2);
 
-        _statusLabel.Text = "●";
-        _statusLabel.AutoSize = true;
-        _statusLabel.ForeColor = Color.FromArgb(161, 161, 170);
-        _statusLabel.Font = new Font("Segoe UI", 7.5f);
-        _statusLabel.Margin = Padding.Empty;
-        _statusLabel.Anchor = AnchorStyles.Right;
-
-        header.Controls.Add(title, 0, 0);
-        header.Controls.Add(_statusLabel, 1, 0);
-
-        var metrics = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 3,
-            RowCount = 1,
-            Margin = Padding.Empty,
-            BackColor = BackColor
-        };
-        metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 1));
-        metrics.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        Control fiveMetric = BuildMetric("5H", _fiveHourValue);
+        Control weeklyMetric = BuildMetric("W", _weeklyValue);
+        root.Controls.Add(fiveMetric, 1, 0);
+        root.Controls.Add(weeklyMetric, 3, 0);
 
         var divider = new Panel
         {
+            Width = 1,
             Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(63, 63, 70),
-            Margin = new Padding(0, 5, 0, 5)
+            BackColor = Color.FromArgb(58, 58, 62),
+            Margin = new Padding(0, 2, 0, 2)
         };
-
-        metrics.Controls.Add(BuildMetric("5H", _fiveHourValue), 0, 0);
-        metrics.Controls.Add(divider, 1, 0);
-        metrics.Controls.Add(BuildMetric("WEEK", _weeklyValue), 2, 0);
-
-        var resets = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
-            Margin = Padding.Empty,
-            BackColor = BackColor
-        };
-        resets.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        resets.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        root.Controls.Add(divider, 2, 0);
+        root.SetRowSpan(divider, 2);
 
         ConfigureResetLabel(_fiveHourReset);
         ConfigureResetLabel(_weeklyReset);
-        resets.Controls.Add(_fiveHourReset, 0, 0);
-        resets.Controls.Add(_weeklyReset, 1, 0);
+        root.Controls.Add(_fiveHourReset, 1, 1);
+        root.Controls.Add(_weeklyReset, 3, 1);
 
-        root.Controls.Add(header, 0, 0);
-        root.Controls.Add(metrics, 0, 1);
-        root.Controls.Add(resets, 0, 2);
         Controls.Add(root);
 
-        AttachDragRecursively(this);
+        ApplyInteractionRecursively(this);
 
-        Shown += (_, _) => RestorePosition();
+        Shown += (_, _) =>
+        {
+            PerformLayout();
+            RestorePosition();
+        };
+
         FormClosing += (_, e) =>
         {
             if (_allowClose)
@@ -175,60 +134,68 @@ internal sealed class FloatingWidgetForm : Form
         }
     }
 
-    protected override void OnResize(EventArgs e)
+    protected override void OnSizeChanged(EventArgs e)
     {
-        base.OnResize(e);
+        base.OnSizeChanged(e);
         ApplyRoundedRegion();
+    }
+
+    private void ConfigureCodeIcon()
+    {
+        _codeIcon.Size = new Size(22, 22);
+        _codeIcon.Margin = new Padding(1, 5, 7, 0);
+        _codeIcon.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+        _codeIcon.BackColor = BackColor;
+        _codeIcon.StatusColor = Color.FromArgb(161, 161, 170);
     }
 
     private Control BuildMetric(string labelText, Label valueLabel)
     {
-        var panel = new TableLayoutPanel
+        var line = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            BackColor = BackColor,
             Margin = Padding.Empty,
-            BackColor = BackColor
+            Padding = Padding.Empty
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
         var metricLabel = new Label
         {
             Text = labelText,
             AutoSize = true,
-            ForeColor = Color.FromArgb(161, 161, 170),
-            Font = new Font("Segoe UI Semibold", 8f),
-            Margin = new Padding(0, 7, 6, 0),
-            Anchor = AnchorStyles.Left
+            ForeColor = Color.FromArgb(152, 152, 160),
+            Font = new Font("Segoe UI Semibold", 7.75f),
+            Margin = new Padding(0, 7, 5, 0)
         };
 
         valueLabel.Text = "--";
         valueLabel.AutoSize = true;
         valueLabel.ForeColor = Color.White;
-        valueLabel.Font = new Font("Segoe UI Semibold", 15f);
+        valueLabel.Font = new Font("Segoe UI Semibold", 13.5f);
         valueLabel.Margin = Padding.Empty;
-        valueLabel.Anchor = AnchorStyles.Left;
 
-        panel.Controls.Add(metricLabel, 0, 0);
-        panel.Controls.Add(valueLabel, 1, 0);
-        return panel;
+        line.Controls.Add(metricLabel);
+        line.Controls.Add(valueLabel);
+        return line;
     }
 
     private static void ConfigureResetLabel(Label label)
     {
-        label.Text = "reset --";
+        label.Text = "--";
         label.AutoSize = true;
-        label.ForeColor = Color.FromArgb(161, 161, 170);
+        label.ForeColor = Color.FromArgb(145, 145, 152);
         label.Font = new Font("Segoe UI", 7.25f);
-        label.Margin = Padding.Empty;
+        label.Margin = new Padding(0, 1, 0, 0);
         label.Anchor = AnchorStyles.Left;
     }
 
     public void SetLoading()
     {
-        _statusLabel.ForeColor = Color.FromArgb(250, 204, 21);
+        _codeIcon.StatusColor = Color.FromArgb(250, 204, 21);
+        _codeIcon.Invalidate();
     }
 
     public void SetSnapshot(UsageSnapshot snapshot)
@@ -236,7 +203,8 @@ internal sealed class FloatingWidgetForm : Form
         _snapshot = snapshot;
         _fiveHourValue.Text = FormatPercent(snapshot.FiveHour);
         _weeklyValue.Text = FormatPercent(snapshot.Weekly);
-        _statusLabel.ForeColor = Color.FromArgb(74, 222, 128);
+        _codeIcon.StatusColor = Color.FromArgb(74, 222, 128);
+        _codeIcon.Invalidate();
 
         UpdateCountdowns();
         UpdateToolTip(snapshot);
@@ -244,8 +212,9 @@ internal sealed class FloatingWidgetForm : Form
 
     public void SetError(string message)
     {
-        _statusLabel.ForeColor = Color.FromArgb(248, 113, 113);
-        _toolTip.SetToolTip(this, message);
+        _codeIcon.StatusColor = Color.FromArgb(248, 113, 113);
+        _codeIcon.Invalidate();
+        ApplyToolTipRecursively(this, message);
     }
 
     public void UpdateCountdowns()
@@ -253,8 +222,8 @@ internal sealed class FloatingWidgetForm : Form
         if (_snapshot is null)
             return;
 
-        _fiveHourReset.Text = FormatReset(_snapshot.FiveHour);
-        _weeklyReset.Text = FormatReset(_snapshot.Weekly);
+        _fiveHourReset.Text = FormatCountdown(_snapshot.FiveHour);
+        _weeklyReset.Text = FormatCountdown(_snapshot.Weekly);
     }
 
     public void AllowClose() => _allowClose = true;
@@ -318,23 +287,23 @@ internal sealed class FloatingWidgetForm : Form
         return window is null ? "N/A" : $"{window.RemainingPercent:0.#}%";
     }
 
-    private static string FormatReset(UsageWindow? window)
+    private static string FormatCountdown(UsageWindow? window)
     {
         if (window?.ResetsAt is null)
-            return "reset --";
+            return "--";
 
         TimeSpan remaining = window.ResetsAt.Value - DateTimeOffset.Now;
 
         if (remaining <= TimeSpan.Zero)
-            return "reset due";
+            return "due";
 
         if (remaining.TotalDays >= 1)
-            return $"reset {(int)remaining.TotalDays}d {remaining.Hours}h";
+            return $"{(int)remaining.TotalDays}d {remaining.Hours}h";
 
         if (remaining.TotalHours >= 1)
-            return $"reset {(int)remaining.TotalHours}h {remaining.Minutes}m";
+            return $"{(int)remaining.TotalHours}h {remaining.Minutes}m";
 
-        return $"reset {Math.Max(0, remaining.Minutes)}m";
+        return $"{Math.Max(0, remaining.Minutes)}m";
     }
 
     private void UpdateToolTip(UsageSnapshot snapshot)
@@ -365,7 +334,7 @@ internal sealed class FloatingWidgetForm : Form
 
     private void ApplyRoundedRegion()
     {
-        const int radius = 12;
+        const int radius = 11;
         int diameter = radius * 2;
 
         using var path = new GraphicsPath();
@@ -386,14 +355,15 @@ internal sealed class FloatingWidgetForm : Form
         Region = new Region(path);
     }
 
-    private void AttachDragRecursively(Control control)
+    private void ApplyInteractionRecursively(Control control)
     {
+        control.ContextMenuStrip = _menu;
         control.MouseDown += DragMouseDown;
         control.MouseMove += DragMouseMove;
         control.MouseUp += DragMouseUp;
 
         foreach (Control child in control.Controls)
-            AttachDragRecursively(child);
+            ApplyInteractionRecursively(child);
     }
 
     private void DragMouseDown(object? sender, MouseEventArgs e)
@@ -438,5 +408,54 @@ internal sealed class FloatingWidgetForm : Form
         int x = Math.Clamp(location.X, area.Left, Math.Max(area.Left, area.Right - Width));
         int y = Math.Clamp(location.Y, area.Top, Math.Max(area.Top, area.Bottom - Height));
         return new Point(x, y);
+    }
+
+    private sealed class CodeIconControl : Control
+    {
+        public Color StatusColor { get; set; } = Color.FromArgb(161, 161, 170);
+
+        public CodeIconControl()
+        {
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+            using var borderPen = new Pen(Color.FromArgb(92, 92, 98), 1.2f);
+            using var glyphPen = new Pen(Color.FromArgb(224, 224, 228), 1.6f)
+            {
+                StartCap = LineCap.Round,
+                EndCap = LineCap.Round
+            };
+            using var statusBrush = new SolidBrush(StatusColor);
+
+            RectangleF box = new(1.5f, 2.5f, Width - 5f, Height - 5f);
+            using var path = RoundedRect(box, 4f);
+            e.Graphics.DrawPath(borderPen, path);
+
+            float midY = Height / 2f;
+            e.Graphics.DrawLine(glyphPen, 6f, midY - 3f, 9f, midY);
+            e.Graphics.DrawLine(glyphPen, 9f, midY, 6f, midY + 3f);
+            e.Graphics.DrawLine(glyphPen, 11.5f, midY + 3f, 15.5f, midY + 3f);
+
+            e.Graphics.FillEllipse(statusBrush, Width - 6f, 1f, 5f, 5f);
+        }
+
+        private static GraphicsPath RoundedRect(RectangleF bounds, float radius)
+        {
+            float diameter = radius * 2f;
+            var path = new GraphicsPath();
+            path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+            path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+            path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
     }
 }
