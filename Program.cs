@@ -20,7 +20,7 @@ internal static class Program
 
         try
         {
-            Application.Run(new TrayApplicationContext());
+            Application.Run(new WidgetApplicationContext());
         }
         catch (Exception ex)
         {
