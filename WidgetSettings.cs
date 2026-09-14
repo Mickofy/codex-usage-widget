@@ -2,9 +2,11 @@ using System.Text.Json;
 
 namespace CodexUsageWidget;
 
-internal sealed record WidgetSettings(int? TaskbarOffsetX)
+internal sealed class WidgetSettings
 {
     private static readonly object Sync = new();
+
+    public int? TaskbarOffsetX { get; set; }
 
     private static string SettingsDirectory =>
         Path.Combine(
@@ -19,16 +21,16 @@ internal sealed record WidgetSettings(int? TaskbarOffsetX)
         try
         {
             if (!File.Exists(SettingsPath))
-                return new WidgetSettings(null);
+                return new WidgetSettings();
 
             string json = File.ReadAllText(SettingsPath);
             return JsonSerializer.Deserialize<WidgetSettings>(json)
-                ?? new WidgetSettings(null);
+                ?? new WidgetSettings();
         }
         catch (Exception ex)
         {
             AppLog.Write("Could not load widget settings", ex);
-            return new WidgetSettings(null);
+            return new WidgetSettings();
         }
     }
 
@@ -37,10 +39,13 @@ internal sealed record WidgetSettings(int? TaskbarOffsetX)
         try
         {
             Directory.CreateDirectory(SettingsDirectory);
-            string json = JsonSerializer.Serialize(settings, new JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
+
+            string json = JsonSerializer.Serialize(
+                settings,
+                new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
 
             lock (Sync)
             {
