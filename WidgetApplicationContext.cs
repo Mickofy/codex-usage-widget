@@ -2,7 +2,7 @@ namespace CodexUsageWidget;
 
 internal sealed class WidgetApplicationContext : ApplicationContext
 {
-    private readonly TaskbarWidgetForm _widget;
+    private readonly FloatingWidgetForm _widget;
     private readonly CodexUsageService _service = new();
     private readonly System.Windows.Forms.Timer _refreshTimer;
     private readonly System.Windows.Forms.Timer _countdownTimer;
@@ -12,11 +12,10 @@ internal sealed class WidgetApplicationContext : ApplicationContext
 
     public WidgetApplicationContext()
     {
-        _widget = new TaskbarWidgetForm();
+        _widget = new FloatingWidgetForm();
         _widget.RefreshRequested += async (_, _) => await RefreshAsync();
         _widget.ExitRequested += (_, _) => ExitApp();
         _widget.OpenLogRequested += (_, _) => OpenLog();
-        _widget.SnapRequested += (_, _) => _widget.SnapToTaskbar();
 
         _refreshTimer = new System.Windows.Forms.Timer
         {
@@ -29,16 +28,10 @@ internal sealed class WidgetApplicationContext : ApplicationContext
         {
             Interval = 30 * 1000
         };
-        _countdownTimer.Tick += (_, _) =>
-        {
-            _widget.UpdateCountdowns();
-            _widget.KeepInsideTaskbar();
-        };
+        _countdownTimer.Tick += (_, _) => _widget.UpdateCountdowns();
         _countdownTimer.Start();
 
         _widget.Show();
-        _widget.SnapToTaskbar();
-
         _ = RefreshAsync();
     }
 
