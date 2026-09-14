@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Runtime.InteropServices;
 
@@ -9,8 +11,8 @@ internal sealed class FloatingWidgetForm : Form
     private const int WidgetWidth = 230;
     private const int WidgetHeight = 76;
     private const int ScreenMargin = 18;
-    private const double WidgetOpacity = 0.90;
     private const float CornerRadius = 15f;
+    private const byte CardBackgroundAlpha = 230;
 
     private static readonly Color CardBackground = Color.FromArgb(18, 22, 28);
     private static readonly Color LabelColor = Color.FromArgb(170, 173, 180);
@@ -54,11 +56,7 @@ internal sealed class FloatingWidgetForm : Form
         ClientSize = new Size(WidgetWidth, WidgetHeight);
         MinimumSize = new Size(WidgetWidth, WidgetHeight);
         MaximumSize = new Size(WidgetWidth, WidgetHeight);
-        BackColor = CardBackground;
-        ForeColor = Color.White;
         AutoScaleMode = AutoScaleMode.None;
-        Opacity = WidgetOpacity;
-        DoubleBuffered = true;
 
         try
         {
@@ -107,7 +105,11 @@ internal sealed class FloatingWidgetForm : Form
         MouseUp += DragMouseUp;
         MouseEnter += (_, _) => RefreshHoverText();
 
-        Shown += (_, _) => RestorePosition();
+        Shown += (_, _) =>
+        {
+            RestorePosition();
+            RenderLayeredWindow();
+        };
 
         FormClosing += (_, e) =>
         {
@@ -123,8 +125,10 @@ internal sealed class FloatingWidgetForm : Form
         get
         {
             const int WsExToolWindow = 0x00000080;
+            const int WsExLayered = 0x00080000;
+
             CreateParams cp = base.CreateParams;
-            cp.ExStyle |= WsExToolWindow;
+            cp.ExStyle |= WsExToolWindow | WsExLayered;
             return cp;
         }
     }
@@ -133,8 +137,6 @@ internal sealed class FloatingWidgetForm : Form
     {
         base.OnHandleCreated(e);
 
-        // Keep the widget shadowless. The form region supplies the rounded
-        // silhouette without drawing a visible outer stroke.
         const int DwmwaNcRenderingPolicy = 2;
         const int DwmncrpDisabled = 1;
         int policy = DwmncrpDisabled;
@@ -149,35 +151,123 @@ internal sealed class FloatingWidgetForm : Form
         }
         catch (DllNotFoundException)
         {
-            // Older/non-DWM environments can continue without the attribute.
+            // Continue without DWM customization.
         }
         catch (EntryPointNotFoundException)
         {
-            // Older/non-DWM environments can continue without the attribute.
+            // Continue without DWM customization.
         }
+    }
 
-        ApplyRoundedRegion();
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        // A layered window is rendered entirely through UpdateLayeredWindow.
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        base.OnPaint(e);
+        // A layered window is rendered entirely through UpdateLayeredWindow.
+    }
 
-        Graphics graphics = e.Graphics;
+    private Bitmap BuildWidgetBitmap()
+    {
+        var bitmap = new Bitmap(
+            WidgetWidth,
+            WidgetHeight,
+            PixelFormat.Format32bppPArgb);
+
+        using Graphics graphics = Graphics.FromImage(bitmap);
+        graphics.Clear(Color.Transparent);
         graphics.SmoothingMode = SmoothingMode.AntiAlias;
         graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        graphics.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-        graphics.Clear(CardBackground);
+        graphics.CompositingMode = CompositingMode.SourceOver;
+        graphics.CompositingQuality = CompositingQuality.HighQuality;
+        graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+
+        using (GraphicsPath cardPath = RoundedRect(
+                   new RectangleF(0.5f, 0.5f, WidgetWidth - 1f, WidgetHeight - 1f),
+                   CornerRadius))
+        using (var cardBrush = new SolidBrush(Color.FromArgb(
+                   CardBackgroundAlpha,
+                   CardBackground.R,
+                   CardBackground.G,
+                   CardBackground.B)))
+        {
+            graphics.FillPath(cardBrush, cardPath);
+        }
 
         DrawOfficialBlossom(graphics);
         DrawMetricRow(graphics, "5h Usage", FormatPercent(_snapshot?.FiveHour), 13f);
         DrawMetricRow(graphics, "Weekly", FormatPercent(_snapshot?.Weekly), 39f);
+
+        return bitmap;
     }
 
-    protected override void OnSizeChanged(EventArgs e)
+    private void RenderLayeredWindow()
     {
-        base.OnSizeChanged(e);
-        ApplyRoundedRegion();
+        if (!IsHandleCreated || IsDisposed)
+            return;
+
+        using Bitmap bitmap = BuildWidgetBitmap();
+
+        IntPtr screenDc = GetDC(IntPtr.Zero);
+        if (screenDc == IntPtr.Zero)
+            return;
+
+        IntPtr memoryDc = CreateCompatibleDC(screenDc);
+        if (memoryDc == IntPtr.Zero)
+        {
+            ReleaseDC(IntPtr.Zero, screenDc);
+            return;
+        }
+
+        IntPtr hBitmap = IntPtr.Zero;
+        IntPtr oldBitmap = IntPtr.Zero;
+
+        try
+        {
+            hBitmap = bitmap.GetHbitmap(Color.FromArgb(0));
+            oldBitmap = SelectObject(memoryDc, hBitmap);
+
+            var destination = new NativePoint(Left, Top);
+            var source = new NativePoint(0, 0);
+            var size = new NativeSize(WidgetWidth, WidgetHeight);
+            var blend = new BlendFunction
+            {
+                BlendOp = 0,
+                BlendFlags = 0,
+                SourceConstantAlpha = 255,
+                AlphaFormat = 1
+            };
+
+            if (!UpdateLayeredWindow(
+                    Handle,
+                    screenDc,
+                    ref destination,
+                    ref size,
+                    memoryDc,
+                    ref source,
+                    0,
+                    ref blend,
+                    2))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("Could not render layered widget", ex);
+        }
+        finally
+        {
+            if (oldBitmap != IntPtr.Zero)
+                SelectObject(memoryDc, oldBitmap);
+            if (hBitmap != IntPtr.Zero)
+                DeleteObject(hBitmap);
+
+            DeleteDC(memoryDc);
+            ReleaseDC(IntPtr.Zero, screenDc);
+        }
     }
 
     private void DrawOfficialBlossom(Graphics graphics)
@@ -196,7 +286,9 @@ internal sealed class FloatingWidgetForm : Form
         using var labelBrush = new SolidBrush(LabelColor);
         using var valueBrush = new SolidBrush(ValueColor);
 
-        RectangleF labelRect = new(78f, y, 86f, 24f);
+        // With the divider removed, use the freed space and bring labels
+        // slightly closer to the icon.
+        RectangleF labelRect = new(70f, y, 94f, 24f);
         RectangleF valueRect = new(164f, y - 1f, 52f, 25f);
 
         using var labelFormat = new StringFormat
@@ -234,7 +326,7 @@ internal sealed class FloatingWidgetForm : Form
     {
         _state = WidgetState.Loading;
         _errorMessage = null;
-        Invalidate();
+        RenderLayeredWindow();
     }
 
     public void SetSnapshot(UsageSnapshot snapshot)
@@ -243,7 +335,7 @@ internal sealed class FloatingWidgetForm : Form
         _errorMessage = null;
         _state = WidgetState.Live;
         RefreshHoverText();
-        Invalidate();
+        RenderLayeredWindow();
     }
 
     public void SetError(string message)
@@ -251,7 +343,7 @@ internal sealed class FloatingWidgetForm : Form
         _errorMessage = message;
         _state = WidgetState.Error;
         RefreshHoverText();
-        Invalidate();
+        RenderLayeredWindow();
     }
 
     public void UpdateCountdowns() => RefreshHoverText();
@@ -374,19 +466,6 @@ internal sealed class FloatingWidgetForm : Form
             : $"{window.RemainingPercent:0.#}%";
     }
 
-    private void ApplyRoundedRegion()
-    {
-        if (ClientSize.Width <= 0 || ClientSize.Height <= 0)
-            return;
-
-        using GraphicsPath path = RoundedRect(
-            new RectangleF(0, 0, ClientSize.Width, ClientSize.Height),
-            CornerRadius);
-
-        Region?.Dispose();
-        Region = new Region(path);
-    }
-
     private static GraphicsPath RoundedRect(
         RectangleF bounds,
         float radius)
@@ -434,6 +513,7 @@ internal sealed class FloatingWidgetForm : Form
         Cursor = Cursors.Default;
         Location = ClampToVisibleArea(Location);
         SaveCurrentSettings();
+        RenderLayeredWindow();
     }
 
     private Point ClampToVisibleArea(Point location)
@@ -474,6 +554,72 @@ internal sealed class FloatingWidgetForm : Form
         int attribute,
         ref int value,
         int valueSize);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetDC(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteDC(IntPtr hdc);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UpdateLayeredWindow(
+        IntPtr hwnd,
+        IntPtr hdcDst,
+        ref NativePoint pptDst,
+        ref NativeSize psize,
+        IntPtr hdcSrc,
+        ref NativePoint pptSrc,
+        uint crKey,
+        ref BlendFunction pblend,
+        uint dwFlags);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+
+        public NativePoint(int x, int y)
+        {
+            X = x;
+            Y = y;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeSize
+    {
+        public int Width;
+        public int Height;
+
+        public NativeSize(int width, int height)
+        {
+            Width = width;
+            Height = height;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct BlendFunction
+    {
+        public byte BlendOp;
+        public byte BlendFlags;
+        public byte SourceConstantAlpha;
+        public byte AlphaFormat;
+    }
 
     private enum WidgetState
     {
