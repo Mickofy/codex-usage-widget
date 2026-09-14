@@ -6,7 +6,9 @@ internal sealed class WidgetSettings
 {
     private static readonly object Sync = new();
 
-    public int? TaskbarOffsetX { get; set; }
+    public int? X { get; set; }
+    public int? Y { get; set; }
+    public bool AlwaysOnTop { get; set; } = true;
 
     private static string SettingsDirectory =>
         Path.Combine(
