@@ -13,20 +13,20 @@ internal sealed class FloatingWidgetForm : Form
     private static readonly Color CardBackground = Color.FromArgb(18, 22, 28);
     private static readonly Color CardBorder = Color.FromArgb(61, 66, 74);
     private static readonly Color DividerColor = Color.FromArgb(67, 72, 79);
-    private static readonly Color LabelColor = Color.FromArgb(145, 149, 157);
+    private static readonly Color LabelColor = Color.FromArgb(170, 173, 180);
     private static readonly Color ValueColor = Color.FromArgb(246, 246, 247);
 
     private readonly ToolTip _toolTip = new();
     private readonly ToolStripMenuItem _alwaysOnTopItem;
     private readonly ContextMenuStrip _menu;
     private readonly Font _labelFont = new(
-        "Segoe UI",
-        14f,
+        "Cascadia Mono",
+        16f,
         FontStyle.Regular,
         GraphicsUnit.Pixel);
     private readonly Font _valueFont = new(
-        "Segoe UI Semibold",
-        18f,
+        "Cascadia Mono",
+        19f,
         FontStyle.Bold,
         GraphicsUnit.Pixel);
 
