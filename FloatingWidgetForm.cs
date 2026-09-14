@@ -13,8 +13,6 @@ internal sealed class FloatingWidgetForm : Form
     private const float CornerRadius = 15f;
 
     private static readonly Color CardBackground = Color.FromArgb(18, 22, 28);
-    private static readonly Color CardBorder = Color.FromArgb(61, 66, 74);
-    private static readonly Color DividerColor = Color.FromArgb(67, 72, 79);
     private static readonly Color LabelColor = Color.FromArgb(170, 173, 180);
     private static readonly Color ValueColor = Color.FromArgb(246, 246, 247);
 
@@ -135,8 +133,8 @@ internal sealed class FloatingWidgetForm : Form
     {
         base.OnHandleCreated(e);
 
-        // Keep the widget shadowless; the card itself supplies the rounded
-        // silhouette and border.
+        // Keep the widget shadowless. The form region supplies the rounded
+        // silhouette without drawing a visible outer stroke.
         const int DwmwaNcRenderingPolicy = 2;
         const int DwmncrpDisabled = 1;
         int policy = DwmncrpDisabled;
@@ -171,9 +169,7 @@ internal sealed class FloatingWidgetForm : Form
         graphics.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
         graphics.Clear(CardBackground);
 
-        DrawCardBorder(graphics);
         DrawOfficialBlossom(graphics);
-        DrawDivider(graphics);
         DrawMetricRow(graphics, "5h Usage", FormatPercent(_snapshot?.FiveHour), 13f);
         DrawMetricRow(graphics, "Weekly", FormatPercent(_snapshot?.Weekly), 39f);
     }
@@ -184,27 +180,11 @@ internal sealed class FloatingWidgetForm : Form
         ApplyRoundedRegion();
     }
 
-    private void DrawCardBorder(Graphics graphics)
-    {
-        using var borderPen = new Pen(CardBorder, 1f);
-        using GraphicsPath path = RoundedRect(
-            new RectangleF(0.75f, 0.75f, ClientSize.Width - 1.5f, ClientSize.Height - 1.5f),
-            CornerRadius);
-
-        graphics.DrawPath(borderPen, path);
-    }
-
     private void DrawOfficialBlossom(Graphics graphics)
     {
         _blossomRenderer?.Draw(
             graphics,
             new RectangleF(18f, 20f, 36f, 36f));
-    }
-
-    private static void DrawDivider(Graphics graphics)
-    {
-        using var pen = new Pen(DividerColor, 1f);
-        graphics.DrawLine(pen, 67.5f, 15f, 67.5f, 61f);
     }
 
     private void DrawMetricRow(
@@ -216,7 +196,7 @@ internal sealed class FloatingWidgetForm : Form
         using var labelBrush = new SolidBrush(LabelColor);
         using var valueBrush = new SolidBrush(ValueColor);
 
-        RectangleF labelRect = new(84f, y, 80f, 24f);
+        RectangleF labelRect = new(78f, y, 86f, 24f);
         RectangleF valueRect = new(164f, y - 1f, 52f, 25f);
 
         using var labelFormat = new StringFormat
