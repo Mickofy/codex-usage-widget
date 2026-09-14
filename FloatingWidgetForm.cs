@@ -9,6 +9,7 @@ internal sealed class FloatingWidgetForm : Form
     private const int WidgetWidth = 230;
     private const int WidgetHeight = 76;
     private const int ScreenMargin = 18;
+    private const double WidgetOpacity = 0.90;
 
     private static readonly Color CardBackground = Color.FromArgb(18, 22, 28);
     private static readonly Color CardBorder = Color.FromArgb(61, 66, 74);
@@ -20,14 +21,14 @@ internal sealed class FloatingWidgetForm : Form
     private readonly ToolStripMenuItem _alwaysOnTopItem;
     private readonly ContextMenuStrip _menu;
     private readonly Font _labelFont = new(
-        "SF Pro Text",
-        16f,
+        "Inter",
+        14f,
         FontStyle.Regular,
         GraphicsUnit.Pixel);
     private readonly Font _valueFont = new(
-        "SF Pro Text",
-        19f,
-        FontStyle.Bold,
+        "Inter SemiBold",
+        15f,
+        FontStyle.Regular,
         GraphicsUnit.Pixel);
 
     private OpenAiBlossomRenderer? _blossomRenderer;
@@ -37,7 +38,6 @@ internal sealed class FloatingWidgetForm : Form
     private bool _allowClose;
     private bool _dragging;
     private bool _restoringSettings;
-    private bool _useRegionFallback;
     private Point _dragStartCursor;
     private Point _dragStartLocation;
 
@@ -58,6 +58,7 @@ internal sealed class FloatingWidgetForm : Form
         BackColor = CardBackground;
         ForeColor = Color.White;
         AutoScaleMode = AutoScaleMode.None;
+        Opacity = WidgetOpacity;
         DoubleBuffered = true;
 
         try
@@ -133,30 +134,30 @@ internal sealed class FloatingWidgetForm : Form
     {
         base.OnHandleCreated(e);
 
-        const int DwmwaWindowCornerPreference = 33;
-        int preference = 2; // DWMWCP_ROUND
+        // Disable DWM non-client rendering so Windows does not add its own
+        // window frame/shadow. The rounded shape is handled by our region.
+        const int DwmwaNcRenderingPolicy = 2;
+        const int DwmncrpDisabled = 1;
+        int policy = DwmncrpDisabled;
 
         try
         {
-            int result = DwmSetWindowAttribute(
+            DwmSetWindowAttribute(
                 Handle,
-                DwmwaWindowCornerPreference,
-                ref preference,
+                DwmwaNcRenderingPolicy,
+                ref policy,
                 sizeof(int));
-
-            _useRegionFallback = result != 0;
         }
         catch (DllNotFoundException)
         {
-            _useRegionFallback = true;
+            // Older/non-DWM environments can continue without the attribute.
         }
         catch (EntryPointNotFoundException)
         {
-            _useRegionFallback = true;
+            // Older/non-DWM environments can continue without the attribute.
         }
 
-        if (_useRegionFallback)
-            ApplyRoundedRegion();
+        ApplyRoundedRegion();
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -179,9 +180,7 @@ internal sealed class FloatingWidgetForm : Form
     protected override void OnSizeChanged(EventArgs e)
     {
         base.OnSizeChanged(e);
-
-        if (_useRegionFallback)
-            ApplyRoundedRegion();
+        ApplyRoundedRegion();
     }
 
     private void DrawCardBorder(Graphics graphics)
