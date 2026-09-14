@@ -372,7 +372,10 @@ internal sealed class TaskbarWidgetForm : Form
             if (TryGetTaskbarRectangle(out Rectangle taskbar))
             {
                 int offset = Math.Max(0, Left - taskbar.Left);
-                WidgetSettings.Save(new WidgetSettings(offset));
+                WidgetSettings.Save(new WidgetSettings
+                {
+                    TaskbarOffsetX = offset
+                });
             }
         };
     }
