@@ -1,22 +1,23 @@
 using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 
 namespace CodexUsageWidget;
 
 internal sealed class FloatingWidgetForm : Form
 {
-    private const int MetricWidth = 94;
+    private const int WidgetWidth = 230;
+    private const int WidgetHeight = 76;
     private const int ScreenMargin = 18;
 
-    private readonly CodeIconControl _codeIcon = new();
-    private readonly Label _fiveHourValue = new();
-    private readonly Label _weeklyValue = new();
-    private readonly Label _fiveHourReset = new();
-    private readonly Label _weeklyReset = new();
     private readonly ToolTip _toolTip = new();
     private readonly ToolStripMenuItem _alwaysOnTopItem;
     private readonly ContextMenuStrip _menu;
+    private readonly Font _labelFont = new("Segoe UI Semibold", 9.5f, FontStyle.Regular);
+    private readonly Font _valueFont = new("Segoe UI Semibold", 13f, FontStyle.Bold);
 
     private UsageSnapshot? _snapshot;
+    private string? _errorMessage;
+    private WidgetState _state = WidgetState.Loading;
     private bool _allowClose;
     private bool _dragging;
     private bool _restoringSettings;
@@ -34,13 +35,20 @@ internal sealed class FloatingWidgetForm : Form
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
         TopMost = true;
-        BackColor = Color.FromArgb(28, 28, 30);
+        ClientSize = new Size(WidgetWidth, WidgetHeight);
+        MinimumSize = new Size(WidgetWidth, WidgetHeight);
+        MaximumSize = new Size(WidgetWidth, WidgetHeight);
+        BackColor = Color.FromArgb(24, 25, 28);
         ForeColor = Color.White;
-        Font = new Font("Segoe UI", 9f);
         AutoScaleMode = AutoScaleMode.Dpi;
-        AutoSize = true;
-        AutoSizeMode = AutoSizeMode.GrowAndShrink;
         Opacity = 0.98;
+        DoubleBuffered = true;
+
+        _toolTip.InitialDelay = 300;
+        _toolTip.ReshowDelay = 100;
+        _toolTip.AutoPopDelay = 12_000;
+        _toolTip.ShowAlways = true;
+        _toolTip.SetToolTip(this, "Loading Codex usage…");
 
         _menu = new ContextMenuStrip();
         _menu.Items.Add("Refresh", null, (_, _) => RefreshRequested?.Invoke(this, EventArgs.Empty));
@@ -59,57 +67,12 @@ internal sealed class FloatingWidgetForm : Form
         _menu.Items.Add("Exit", null, (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty));
         ContextMenuStrip = _menu;
 
-        var root = new TableLayoutPanel
-        {
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Padding = new Padding(10, 8, 10, 8),
-            BackColor = BackColor,
-            ColumnCount = 4,
-            RowCount = 2,
-            Margin = Padding.Empty
-        };
+        MouseDown += DragMouseDown;
+        MouseMove += DragMouseMove;
+        MouseUp += DragMouseUp;
+        MouseEnter += (_, _) => RefreshHoverText();
 
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, MetricWidth));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 1));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, MetricWidth));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-        ConfigureCodeIcon();
-        root.Controls.Add(_codeIcon, 0, 0);
-        root.SetRowSpan(_codeIcon, 2);
-
-        Control fiveMetric = BuildMetric("5H", _fiveHourValue);
-        Control weeklyMetric = BuildMetric("W", _weeklyValue);
-        root.Controls.Add(fiveMetric, 1, 0);
-        root.Controls.Add(weeklyMetric, 3, 0);
-
-        var divider = new Panel
-        {
-            Width = 1,
-            Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(58, 58, 62),
-            Margin = new Padding(0, 2, 0, 2)
-        };
-        root.Controls.Add(divider, 2, 0);
-        root.SetRowSpan(divider, 2);
-
-        ConfigureResetLabel(_fiveHourReset);
-        ConfigureResetLabel(_weeklyReset);
-        root.Controls.Add(_fiveHourReset, 1, 1);
-        root.Controls.Add(_weeklyReset, 3, 1);
-
-        Controls.Add(root);
-
-        ApplyInteractionRecursively(this);
-
-        Shown += (_, _) =>
-        {
-            PerformLayout();
-            RestorePosition();
-        };
+        Shown += (_, _) => RestorePosition();
 
         FormClosing += (_, e) =>
         {
@@ -134,96 +97,112 @@ internal sealed class FloatingWidgetForm : Form
         }
     }
 
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        e.Graphics.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+
+        DrawCardBorder(e.Graphics);
+        DrawDivider(e.Graphics);
+        DrawCodexMark(e.Graphics);
+        DrawMetricRow(e.Graphics, "5h Usage", FormatPercent(_snapshot?.FiveHour), 15f);
+        DrawMetricRow(e.Graphics, "Weekly", FormatPercent(_snapshot?.Weekly), 43f);
+    }
+
     protected override void OnSizeChanged(EventArgs e)
     {
         base.OnSizeChanged(e);
         ApplyRoundedRegion();
     }
 
-    private void ConfigureCodeIcon()
+    private void DrawCardBorder(Graphics graphics)
     {
-        _codeIcon.Size = new Size(22, 22);
-        _codeIcon.Margin = new Padding(1, 5, 7, 0);
-        _codeIcon.Anchor = AnchorStyles.Top | AnchorStyles.Left;
-        _codeIcon.BackColor = BackColor;
-        _codeIcon.StatusColor = Color.FromArgb(161, 161, 170);
+        using var borderPen = new Pen(Color.FromArgb(70, 74, 82), 1.1f);
+        using GraphicsPath path = RoundedRect(
+            new RectangleF(0.7f, 0.7f, ClientSize.Width - 1.4f, ClientSize.Height - 1.4f),
+            14f);
+
+        graphics.DrawPath(borderPen, path);
     }
 
-    private Control BuildMetric(string labelText, Label valueLabel)
+    private void DrawDivider(Graphics graphics)
     {
-        var line = new FlowLayoutPanel
-        {
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            BackColor = BackColor,
-            Margin = Padding.Empty,
-            Padding = Padding.Empty
-        };
-
-        var metricLabel = new Label
-        {
-            Text = labelText,
-            AutoSize = true,
-            ForeColor = Color.FromArgb(152, 152, 160),
-            Font = new Font("Segoe UI Semibold", 7.75f),
-            Margin = new Padding(0, 7, 5, 0)
-        };
-
-        valueLabel.Text = "--";
-        valueLabel.AutoSize = true;
-        valueLabel.ForeColor = Color.White;
-        valueLabel.Font = new Font("Segoe UI Semibold", 13.5f);
-        valueLabel.Margin = Padding.Empty;
-
-        line.Controls.Add(metricLabel);
-        line.Controls.Add(valueLabel);
-        return line;
+        using var pen = new Pen(Color.FromArgb(61, 64, 70), 1f);
+        graphics.DrawLine(pen, 67f, 14f, 67f, ClientSize.Height - 14f);
     }
 
-    private static void ConfigureResetLabel(Label label)
+    private void DrawCodexMark(Graphics graphics)
     {
-        label.Text = "--";
-        label.AutoSize = true;
-        label.ForeColor = Color.FromArgb(145, 145, 152);
-        label.Font = new Font("Segoe UI", 7.25f);
-        label.Margin = new Padding(0, 1, 0, 0);
-        label.Anchor = AnchorStyles.Left;
+        Color color = _state switch
+        {
+            WidgetState.Live => Color.FromArgb(239, 239, 242),
+            WidgetState.Loading => Color.FromArgb(170, 171, 178),
+            WidgetState.Error => Color.FromArgb(248, 113, 113),
+            _ => Color.White
+        };
+
+        GraphicsState state = graphics.Save();
+        graphics.TranslateTransform(34f, 38f);
+
+        using var pen = new Pen(color, 2.05f)
+        {
+            StartCap = LineCap.Round,
+            EndCap = LineCap.Round,
+            LineJoin = LineJoin.Round
+        };
+
+        // Six overlapping loops create a compact knot-like mark without
+        // requiring an external image asset.
+        for (int i = 0; i < 6; i++)
+        {
+            graphics.RotateTransform(60f);
+            graphics.DrawArc(pen, -5.5f, -16f, 11f, 21f, 205f, 250f);
+        }
+
+        graphics.Restore(state);
+    }
+
+    private void DrawMetricRow(Graphics graphics, string label, string value, float y)
+    {
+        using var labelBrush = new SolidBrush(Color.FromArgb(160, 162, 169));
+        using var valueBrush = new SolidBrush(Color.FromArgb(244, 244, 246));
+
+        graphics.DrawString(label, _labelFont, labelBrush, 82f, y);
+
+        SizeF valueSize = graphics.MeasureString(value, _valueFont);
+        float valueX = ClientSize.Width - 14f - valueSize.Width;
+        graphics.DrawString(value, _valueFont, valueBrush, valueX, y - 3f);
     }
 
     public void SetLoading()
     {
-        _codeIcon.StatusColor = Color.FromArgb(250, 204, 21);
-        _codeIcon.Invalidate();
+        _state = WidgetState.Loading;
+        _errorMessage = null;
+        Invalidate();
     }
 
     public void SetSnapshot(UsageSnapshot snapshot)
     {
         _snapshot = snapshot;
-        _fiveHourValue.Text = FormatPercent(snapshot.FiveHour);
-        _weeklyValue.Text = FormatPercent(snapshot.Weekly);
-        _codeIcon.StatusColor = Color.FromArgb(74, 222, 128);
-        _codeIcon.Invalidate();
-
-        UpdateCountdowns();
-        UpdateToolTip(snapshot);
+        _errorMessage = null;
+        _state = WidgetState.Live;
+        RefreshHoverText();
+        Invalidate();
     }
 
     public void SetError(string message)
     {
-        _codeIcon.StatusColor = Color.FromArgb(248, 113, 113);
-        _codeIcon.Invalidate();
-        ApplyToolTipRecursively(this, message);
+        _errorMessage = message;
+        _state = WidgetState.Error;
+        RefreshHoverText();
+        Invalidate();
     }
 
     public void UpdateCountdowns()
     {
-        if (_snapshot is null)
-            return;
-
-        _fiveHourReset.Text = FormatCountdown(_snapshot.FiveHour);
-        _weeklyReset.Text = FormatCountdown(_snapshot.Weekly);
+        RefreshHoverText();
     }
 
     public void AllowClose() => _allowClose = true;
@@ -282,88 +261,85 @@ internal sealed class FloatingWidgetForm : Form
         });
     }
 
-    private static string FormatPercent(UsageWindow? window)
+    private void RefreshHoverText()
     {
-        return window is null ? "N/A" : $"{window.RemainingPercent:0.#}%";
+        string text;
+
+        if (_state == WidgetState.Error)
+        {
+            text = $"Codex usage unavailable\n{_errorMessage ?? "Unknown error"}";
+        }
+        else if (_snapshot is null)
+        {
+            text = "Loading Codex usage…";
+        }
+        else
+        {
+            text = string.Join(
+                Environment.NewLine,
+                BuildResetLine("5h reset", _snapshot.FiveHour),
+                BuildResetLine("Weekly reset", _snapshot.Weekly),
+                $"Updated: {_snapshot.RetrievedAt:h:mm:ss tt}");
+        }
+
+        _toolTip.SetToolTip(this, text);
     }
 
-    private static string FormatCountdown(UsageWindow? window)
+    private static string BuildResetLine(string label, UsageWindow? window)
     {
         if (window?.ResetsAt is null)
-            return "--";
+            return $"{label}: unavailable";
 
-        TimeSpan remaining = window.ResetsAt.Value - DateTimeOffset.Now;
+        string countdown = FormatCountdown(window.ResetsAt.Value);
+        return $"{label}: {window.ResetsAt.Value:MMM d, h:mm tt} ({countdown})";
+    }
+
+    private static string FormatCountdown(DateTimeOffset resetAt)
+    {
+        TimeSpan remaining = resetAt - DateTimeOffset.Now;
 
         if (remaining <= TimeSpan.Zero)
-            return "due";
+            return "due now";
 
         if (remaining.TotalDays >= 1)
-            return $"{(int)remaining.TotalDays}d {remaining.Hours}h";
+            return $"in {(int)remaining.TotalDays}d {remaining.Hours}h {remaining.Minutes}m";
 
         if (remaining.TotalHours >= 1)
-            return $"{(int)remaining.TotalHours}h {remaining.Minutes}m";
+            return $"in {(int)remaining.TotalHours}h {remaining.Minutes}m";
 
-        return $"{Math.Max(0, remaining.Minutes)}m";
+        return $"in {Math.Max(0, remaining.Minutes)}m";
     }
 
-    private void UpdateToolTip(UsageSnapshot snapshot)
+    private static string FormatPercent(UsageWindow? window)
     {
-        string five = snapshot.FiveHour is null
-            ? "5-hour: unavailable"
-            : $"5-hour: {snapshot.FiveHour.RemainingPercent:0.#}% remaining · reset {FormatDate(snapshot.FiveHour.ResetsAt)}";
-
-        string week = snapshot.Weekly is null
-            ? "Weekly: unavailable"
-            : $"Weekly: {snapshot.Weekly.RemainingPercent:0.#}% remaining · reset {FormatDate(snapshot.Weekly.ResetsAt)}";
-
-        string text = $"{five}\n{week}\nUpdated {snapshot.RetrievedAt:h:mm:ss tt}";
-        ApplyToolTipRecursively(this, text);
-    }
-
-    private void ApplyToolTipRecursively(Control control, string text)
-    {
-        _toolTip.SetToolTip(control, text);
-        foreach (Control child in control.Controls)
-            ApplyToolTipRecursively(child, text);
-    }
-
-    private static string FormatDate(DateTimeOffset? value)
-    {
-        return value?.ToString("MMM d, h:mm tt") ?? "unknown";
+        return window is null ? "--" : $"{window.RemainingPercent:0.#}%";
     }
 
     private void ApplyRoundedRegion()
     {
-        const int radius = 11;
-        int diameter = radius * 2;
-
-        using var path = new GraphicsPath();
-        Rectangle rect = ClientRectangle;
-        rect.Width -= 1;
-        rect.Height -= 1;
-
-        if (rect.Width <= diameter || rect.Height <= diameter)
+        if (ClientSize.Width <= 0 || ClientSize.Height <= 0)
             return;
 
-        path.AddArc(rect.Left, rect.Top, diameter, diameter, 180, 90);
-        path.AddArc(rect.Right - diameter, rect.Top, diameter, diameter, 270, 90);
-        path.AddArc(rect.Right - diameter, rect.Bottom - diameter, diameter, diameter, 0, 90);
-        path.AddArc(rect.Left, rect.Bottom - diameter, diameter, diameter, 90, 90);
-        path.CloseFigure();
+        using GraphicsPath path = RoundedRect(
+            new RectangleF(0, 0, ClientSize.Width, ClientSize.Height),
+            14f);
 
         Region?.Dispose();
         Region = new Region(path);
     }
 
-    private void ApplyInteractionRecursively(Control control)
+    private static GraphicsPath RoundedRect(RectangleF bounds, float radius)
     {
-        control.ContextMenuStrip = _menu;
-        control.MouseDown += DragMouseDown;
-        control.MouseMove += DragMouseMove;
-        control.MouseUp += DragMouseUp;
+        float diameter = radius * 2f;
+        var path = new GraphicsPath();
 
-        foreach (Control child in control.Controls)
-            ApplyInteractionRecursively(child);
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+
+        return path;
     }
 
     private void DragMouseDown(object? sender, MouseEventArgs e)
@@ -410,52 +386,23 @@ internal sealed class FloatingWidgetForm : Form
         return new Point(x, y);
     }
 
-    private sealed class CodeIconControl : Control
+    protected override void Dispose(bool disposing)
     {
-        public Color StatusColor { get; set; } = Color.FromArgb(161, 161, 170);
-
-        public CodeIconControl()
+        if (disposing)
         {
-            DoubleBuffered = true;
-            SetStyle(ControlStyles.ResizeRedraw, true);
+            _labelFont.Dispose();
+            _valueFont.Dispose();
+            _toolTip.Dispose();
+            _menu.Dispose();
         }
 
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            base.OnPaint(e);
+        base.Dispose(disposing);
+    }
 
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-
-            using var borderPen = new Pen(Color.FromArgb(92, 92, 98), 1.2f);
-            using var glyphPen = new Pen(Color.FromArgb(224, 224, 228), 1.6f)
-            {
-                StartCap = LineCap.Round,
-                EndCap = LineCap.Round
-            };
-            using var statusBrush = new SolidBrush(StatusColor);
-
-            RectangleF box = new(1.5f, 2.5f, Width - 5f, Height - 5f);
-            using var path = RoundedRect(box, 4f);
-            e.Graphics.DrawPath(borderPen, path);
-
-            float midY = Height / 2f;
-            e.Graphics.DrawLine(glyphPen, 6f, midY - 3f, 9f, midY);
-            e.Graphics.DrawLine(glyphPen, 9f, midY, 6f, midY + 3f);
-            e.Graphics.DrawLine(glyphPen, 11.5f, midY + 3f, 15.5f, midY + 3f);
-
-            e.Graphics.FillEllipse(statusBrush, Width - 6f, 1f, 5f, 5f);
-        }
-
-        private static GraphicsPath RoundedRect(RectangleF bounds, float radius)
-        {
-            float diameter = radius * 2f;
-            var path = new GraphicsPath();
-            path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
-            path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
-            path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
-            path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
-            path.CloseFigure();
-            return path;
-        }
+    private enum WidgetState
+    {
+        Loading,
+        Live,
+        Error
     }
 }
