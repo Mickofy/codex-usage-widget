@@ -422,8 +422,7 @@ internal sealed class FloatingWidgetForm : Form
             text = string.Join(
                 Environment.NewLine,
                 BuildResetLine("5h Usage", _snapshot.FiveHour),
-                BuildResetLine("Weekly", _snapshot.Weekly),
-                $"Updated: {_snapshot.RetrievedAt:h:mm:ss tt}");
+                BuildResetLine("Weekly", _snapshot.Weekly));
         }
 
         _toolTip.SetToolTip(this, text);
@@ -437,7 +436,7 @@ internal sealed class FloatingWidgetForm : Form
             return $"{label}: reset unavailable";
 
         string countdown = FormatCountdown(window.ResetsAt.Value);
-        return $"{label}: resets {window.ResetsAt.Value:MMM d, h:mm tt} · {countdown}";
+        return $"{label}: resets {countdown}";
     }
 
     private static string FormatCountdown(DateTimeOffset resetAt)
