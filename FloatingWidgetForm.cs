@@ -8,7 +8,7 @@ namespace CodexUsageWidget;
 
 internal sealed class FloatingWidgetForm : Form
 {
-    private const int WidgetWidth = 200;
+    private const int WidgetWidth = 206;
     private const int WidgetHeight = 76;
     private const int ScreenMargin = 18;
     private const float CornerRadius = 15f;
@@ -286,10 +286,10 @@ internal sealed class FloatingWidgetForm : Form
         using var labelBrush = new SolidBrush(LabelColor);
         using var valueBrush = new SolidBrush(ValueColor);
 
-        // Compact layout: keep the labels close to the icon and pull the
-        // percentage column left while still reserving enough room for 100%.
+        // Keep the compact layout, but add a small visual gap between the
+        // metric label and the percentage column.
         RectangleF labelRect = new(62f, y, 73f, 24f);
-        RectangleF valueRect = new(136f, y - 1f, 50f, 25f);
+        RectangleF valueRect = new(142f, y - 1f, 50f, 25f);
 
         using var labelFormat = new StringFormat
         {
