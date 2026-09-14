@@ -19,6 +19,7 @@ internal sealed class FloatingWidgetForm : Form
     private UsageSnapshot? _snapshot;
     private bool _allowClose;
     private bool _dragging;
+    private bool _restoringSettings;
     private Point _dragStartCursor;
     private Point _dragStartLocation;
 
@@ -261,8 +262,11 @@ internal sealed class FloatingWidgetForm : Form
     public void RestorePosition()
     {
         WidgetSettings settings = WidgetSettings.Load();
+
+        _restoringSettings = true;
         _alwaysOnTopItem.Checked = settings.AlwaysOnTop;
         TopMost = settings.AlwaysOnTop;
+        _restoringSettings = false;
 
         if (settings.X is int x && settings.Y is int y)
         {
@@ -295,7 +299,8 @@ internal sealed class FloatingWidgetForm : Form
     private void SetAlwaysOnTop(bool enabled)
     {
         TopMost = enabled;
-        SaveCurrentSettings();
+        if (!_restoringSettings)
+            SaveCurrentSettings();
     }
 
     private void SaveCurrentSettings()
@@ -343,7 +348,6 @@ internal sealed class FloatingWidgetForm : Form
             : $"Weekly: {snapshot.Weekly.RemainingPercent:0.#}% remaining · reset {FormatDate(snapshot.Weekly.ResetsAt)}";
 
         string text = $"{five}\n{week}\nUpdated {snapshot.RetrievedAt:h:mm:ss tt}";
-
         ApplyToolTipRecursively(this, text);
     }
 
