@@ -9,12 +9,12 @@ internal sealed class FloatingWidgetForm : Form
     private const int WidgetWidth = 230;
     private const int WidgetHeight = 76;
     private const int ScreenMargin = 18;
-    private const double WidgetOpacity = 0.88;
-    private const float CornerRadius = 17f;
+    private const double WidgetOpacity = 0.90;
+    private const float CornerRadius = 15f;
 
     private static readonly Color CardBackground = Color.FromArgb(18, 22, 28);
-    private static readonly Color CardBorder = Color.FromArgb(72, 77, 86);
-    private static readonly Color DividerColor = Color.FromArgb(66, 71, 79);
+    private static readonly Color CardBorder = Color.FromArgb(61, 66, 74);
+    private static readonly Color DividerColor = Color.FromArgb(67, 72, 79);
     private static readonly Color LabelColor = Color.FromArgb(170, 173, 180);
     private static readonly Color ValueColor = Color.FromArgb(246, 246, 247);
 
@@ -23,12 +23,12 @@ internal sealed class FloatingWidgetForm : Form
     private readonly ContextMenuStrip _menu;
     private readonly Font _labelFont = new(
         "Inter",
-        14f,
+        16f,
         FontStyle.Regular,
         GraphicsUnit.Pixel);
     private readonly Font _valueFont = new(
         "Inter SemiBold",
-        15f,
+        19f,
         FontStyle.Regular,
         GraphicsUnit.Pixel);
 
