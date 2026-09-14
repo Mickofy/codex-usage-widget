@@ -1,33 +1,34 @@
 # Codex Usage Widget
 
-A lightweight Windows widget for viewing your real Codex usage limits directly above the taskbar.
+A lightweight Windows utility for viewing your real Codex usage limits directly in the taskbar area.
 
 ## Current behavior
 
-The app now uses an **always-visible desktop/taskbar widget** instead of a system-tray icon.
+The app uses a compact **taskbar overlay** rather than a tray icon or floating desktop card.
 
 It shows:
 
 - `5H` — remaining percentage in the 5-hour window
-- `WEEK` — remaining percentage in the weekly window
-- reset countdown for each window
-- live / refreshing / error status
+- `W` — remaining percentage in the weekly window
+- reset countdowns
+- a small live / refreshing / error status dot
 
 The widget:
 
-- stays on top
-- starts near the bottom-right above the Windows taskbar
+- starts inside the taskbar area, just to the right of the Weather/Widgets button by default
+- stays locked to the taskbar vertically
+- can be dragged left/right along the taskbar
+- remembers its horizontal position between launches
 - refreshes Codex usage automatically every 2 minutes
 - updates reset countdowns every 30 seconds
-- can be dragged anywhere with the mouse
-- can be double-clicked to snap back above the taskbar
-- has a right-click menu with:
-  - Refresh
-  - Snap to taskbar
-  - Open log
-  - Exit
+- has a right-click menu with Refresh, Place beside Weather, Open log, and Exit
+- does not create a system-tray icon
 
-There is **no tray icon** in this version.
+## Important Windows limitation
+
+Windows 11 does not expose a supported API for third-party apps to insert arbitrary custom controls directly into the built-in taskbar beside Weather.
+
+This project therefore uses a separate borderless topmost window positioned over unused taskbar space. It visually behaves like a taskbar widget without injecting code into Windows Explorer. That approach is intentionally safer and less likely to break Windows shell behavior.
 
 ## Requirements
 
@@ -49,7 +50,9 @@ git pull
 dotnet run
 ```
 
-The widget should appear immediately above the taskbar.
+The widget should appear in the taskbar area near Weather.
+
+Drag it horizontally if you want a different position. The app stores that position locally under `%LOCALAPPDATA%\CodexUsageWidget`.
 
 ## How it works
 
@@ -96,13 +99,9 @@ Diagnostic logs are written locally to:
 %LOCALAPPDATA%\CodexUsageWidget\app.log
 ```
 
-You can also right-click the widget and choose **Open log**.
-
 ## Planned improvements
 
 - start automatically when Windows signs in
-- remember custom widget position
-- compact / expanded widget modes
 - low-usage notifications at 20%, 10%, and 5%
-- optional light theme
+- optional compact mode with percentages only
 - usage history and trend
