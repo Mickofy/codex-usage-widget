@@ -5,6 +5,14 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        using var singleInstance = new Mutex(
+            initiallyOwned: true,
+            name: "CodexUsageWidget.SingleInstance",
+            createdNew: out bool createdNew);
+
+        if (!createdNew)
+            return;
+
         ApplicationConfiguration.Initialize();
 
         Application.ThreadException += (_, e) =>
