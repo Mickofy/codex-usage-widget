@@ -421,7 +421,7 @@ internal sealed class FloatingWidgetForm : Form
         {
             text = string.Join(
                 Environment.NewLine,
-                BuildResetLine("5h Usage", _snapshot.FiveHour),
+                BuildResetLine("5h", _snapshot.FiveHour),
                 BuildResetLine("Weekly", _snapshot.Weekly));
         }
 
@@ -433,10 +433,10 @@ internal sealed class FloatingWidgetForm : Form
         UsageWindow? window)
     {
         if (window?.ResetsAt is null)
-            return $"{label}: reset unavailable";
+            return $"{label} Reset: unavailable";
 
         string countdown = FormatCountdown(window.ResetsAt.Value);
-        return $"{label}: resets {countdown}";
+        return $"{label} Reset: {countdown}";
     }
 
     private static string FormatCountdown(DateTimeOffset resetAt)
@@ -448,14 +448,14 @@ internal sealed class FloatingWidgetForm : Form
 
         if (remaining.TotalDays >= 1)
         {
-            return $"in {(int)remaining.TotalDays}d " +
+            return $"{(int)remaining.TotalDays}d " +
                    $"{remaining.Hours}h {remaining.Minutes}m";
         }
 
         if (remaining.TotalHours >= 1)
-            return $"in {(int)remaining.TotalHours}h {remaining.Minutes}m";
+            return $"{(int)remaining.TotalHours}h {remaining.Minutes}m";
 
-        return $"in {Math.Max(0, remaining.Minutes)}m";
+        return $"{Math.Max(0, remaining.Minutes)}m";
     }
 
     private static string FormatPercent(UsageWindow? window)
