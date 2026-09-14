@@ -20,12 +20,12 @@ internal sealed class FloatingWidgetForm : Form
     private readonly ToolStripMenuItem _alwaysOnTopItem;
     private readonly ContextMenuStrip _menu;
     private readonly Font _labelFont = new(
-        "Cascadia Mono",
+        "SF Pro Text",
         16f,
         FontStyle.Regular,
         GraphicsUnit.Pixel);
     private readonly Font _valueFont = new(
-        "Cascadia Mono",
+        "SF Pro Text",
         19f,
         FontStyle.Bold,
         GraphicsUnit.Pixel);
