@@ -9,11 +9,12 @@ internal sealed class FloatingWidgetForm : Form
     private const int WidgetWidth = 230;
     private const int WidgetHeight = 76;
     private const int ScreenMargin = 18;
-    private const double WidgetOpacity = 0.90;
+    private const double WidgetOpacity = 0.88;
+    private const float CornerRadius = 17f;
 
     private static readonly Color CardBackground = Color.FromArgb(18, 22, 28);
-    private static readonly Color CardBorder = Color.FromArgb(61, 66, 74);
-    private static readonly Color DividerColor = Color.FromArgb(67, 72, 79);
+    private static readonly Color CardBorder = Color.FromArgb(72, 77, 86);
+    private static readonly Color DividerColor = Color.FromArgb(66, 71, 79);
     private static readonly Color LabelColor = Color.FromArgb(170, 173, 180);
     private static readonly Color ValueColor = Color.FromArgb(246, 246, 247);
 
@@ -134,8 +135,8 @@ internal sealed class FloatingWidgetForm : Form
     {
         base.OnHandleCreated(e);
 
-        // Disable DWM non-client rendering so Windows does not add its own
-        // window frame/shadow. The rounded shape is handled by our region.
+        // Keep the widget shadowless; the card itself supplies the rounded
+        // silhouette and border.
         const int DwmwaNcRenderingPolicy = 2;
         const int DwmncrpDisabled = 1;
         int policy = DwmncrpDisabled;
@@ -188,7 +189,7 @@ internal sealed class FloatingWidgetForm : Form
         using var borderPen = new Pen(CardBorder, 1f);
         using GraphicsPath path = RoundedRect(
             new RectangleF(0.75f, 0.75f, ClientSize.Width - 1.5f, ClientSize.Height - 1.5f),
-            15f);
+            CornerRadius);
 
         graphics.DrawPath(borderPen, path);
     }
@@ -400,7 +401,7 @@ internal sealed class FloatingWidgetForm : Form
 
         using GraphicsPath path = RoundedRect(
             new RectangleF(0, 0, ClientSize.Width, ClientSize.Height),
-            15f);
+            CornerRadius);
 
         Region?.Dispose();
         Region = new Region(path);
