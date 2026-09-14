@@ -8,4 +8,11 @@
     <AssemblyName>CodexUsageWidget</AssemblyName>
     <RootNamespace>CodexUsageWidget</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\chatgpt-blossom-white.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
 </Project>
