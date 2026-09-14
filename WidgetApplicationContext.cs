@@ -29,7 +29,11 @@ internal sealed class WidgetApplicationContext : ApplicationContext
         {
             Interval = 30 * 1000
         };
-        _countdownTimer.Tick += (_, _) => _widget.UpdateCountdowns();
+        _countdownTimer.Tick += (_, _) =>
+        {
+            _widget.UpdateCountdowns();
+            _widget.KeepInsideTaskbar();
+        };
         _countdownTimer.Start();
 
         _widget.Show();
