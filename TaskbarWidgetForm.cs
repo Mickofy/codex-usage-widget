@@ -1,10 +1,12 @@
-using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 
 namespace CodexUsageWidget;
 
 internal sealed class TaskbarWidgetForm : Form
 {
+    private const int DefaultOffsetFromTaskbarLeft = 86;
+    private const int HorizontalPadding = 12;
+
     private readonly Label _statusLabel = new();
     private readonly Label _fiveHourValue = new();
     private readonly Label _weeklyValue = new();
@@ -14,6 +16,10 @@ internal sealed class TaskbarWidgetForm : Form
 
     private UsageSnapshot? _snapshot;
     private bool _allowClose;
+
+    private bool _dragging;
+    private Point _dragStartCursor;
+    private Point _dragStartLocation;
 
     public event EventHandler? RefreshRequested;
     public event EventHandler? ExitRequested;
@@ -27,17 +33,16 @@ internal sealed class TaskbarWidgetForm : Form
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
         TopMost = true;
-        Width = 312;
-        Height = 92;
-        BackColor = Color.FromArgb(24, 24, 27);
+        Width = 292;
+        Height = 58;
+        BackColor = Color.FromArgb(32, 32, 32);
         ForeColor = Color.White;
         Font = new Font("Segoe UI", 9f);
         AutoScaleMode = AutoScaleMode.Dpi;
-        Opacity = 0.97;
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Refresh", null, (_, _) => RefreshRequested?.Invoke(this, EventArgs.Empty));
-        menu.Items.Add("Snap to taskbar", null, (_, _) => SnapRequested?.Invoke(this, EventArgs.Empty));
+        menu.Items.Add("Place beside Weather", null, (_, _) => SnapRequested?.Invoke(this, EventArgs.Empty));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Open log", null, (_, _) => OpenLogRequested?.Invoke(this, EventArgs.Empty));
         menu.Items.Add("Exit", null, (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty));
@@ -46,72 +51,63 @@ internal sealed class TaskbarWidgetForm : Form
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(12, 9, 12, 9),
+            Padding = new Padding(HorizontalPadding, 5, HorizontalPadding, 4),
             BackColor = BackColor,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 2,
             Margin = Padding.Empty
         };
 
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 17));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
 
-        var header = new TableLayoutPanel
+        var mainRow = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 2,
+            ColumnCount = 6,
             RowCount = 1,
             Margin = Padding.Empty,
             BackColor = BackColor
         };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        mainRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        mainRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        mainRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        mainRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        mainRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        mainRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
 
         var title = new Label
         {
-            Text = "CODEX USAGE",
+            Text = "CODEX",
             AutoSize = true,
-            ForeColor = Color.FromArgb(212, 212, 216),
+            ForeColor = Color.FromArgb(228, 228, 231),
             Font = new Font("Segoe UI Semibold", 8.5f),
-            Margin = Padding.Empty,
+            Margin = new Padding(0, 3, 10, 0),
             Anchor = AnchorStyles.Left
         };
 
-        _statusLabel.Text = "LOADING";
+        var fiveLabel = MakeMetricLabel("5H");
+        ConfigureValueLabel(_fiveHourValue);
+
+        var weekLabel = MakeMetricLabel("W");
+        ConfigureValueLabel(_weeklyValue);
+
+        _statusLabel.Text = "●";
         _statusLabel.AutoSize = true;
         _statusLabel.ForeColor = Color.FromArgb(161, 161, 170);
-        _statusLabel.Font = new Font("Segoe UI Semibold", 7.5f);
-        _statusLabel.Margin = Padding.Empty;
+        _statusLabel.Font = new Font("Segoe UI", 8f);
+        _statusLabel.Margin = new Padding(7, 3, 0, 0);
         _statusLabel.Anchor = AnchorStyles.Right;
 
-        header.Controls.Add(title, 0, 0);
-        header.Controls.Add(_statusLabel, 1, 0);
+        mainRow.Controls.Add(title, 0, 0);
+        mainRow.Controls.Add(fiveLabel, 1, 0);
+        mainRow.Controls.Add(_fiveHourValue, 2, 0);
+        mainRow.Controls.Add(weekLabel, 3, 0);
+        mainRow.Controls.Add(_weeklyValue, 4, 0);
+        mainRow.Controls.Add(_statusLabel, 5, 0);
 
-        var values = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 3,
-            RowCount = 1,
-            Margin = Padding.Empty,
-            BackColor = BackColor
-        };
-        values.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        values.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 1));
-        values.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-
-        var divider = new Panel
-        {
-            Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(63, 63, 70),
-            Margin = new Padding(0, 5, 0, 5)
-        };
-
-        values.Controls.Add(BuildMetric("5H", _fiveHourValue), 0, 0);
-        values.Controls.Add(divider, 1, 0);
-        values.Controls.Add(BuildMetric("WEEK", _weeklyValue), 2, 0);
-
-        var resets = new TableLayoutPanel
+        var resetRow = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
@@ -119,33 +115,31 @@ internal sealed class TaskbarWidgetForm : Form
             Margin = Padding.Empty,
             BackColor = BackColor
         };
-        resets.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        resets.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        resetRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        resetRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
 
         ConfigureResetLabel(_fiveHourReset);
         ConfigureResetLabel(_weeklyReset);
 
-        resets.Controls.Add(_fiveHourReset, 0, 0);
-        resets.Controls.Add(_weeklyReset, 1, 0);
+        resetRow.Controls.Add(_fiveHourReset, 0, 0);
+        resetRow.Controls.Add(_weeklyReset, 1, 0);
 
-        root.Controls.Add(header, 0, 0);
-        root.Controls.Add(values, 0, 1);
-        root.Controls.Add(resets, 0, 2);
-
+        root.Controls.Add(mainRow, 0, 0);
+        root.Controls.Add(resetRow, 0, 1);
         Controls.Add(root);
 
         AttachDragHandler(this);
         AttachDragHandler(root);
-        AttachDragHandler(header);
-        AttachDragHandler(values);
+        AttachDragHandler(mainRow);
+        AttachDragHandler(resetRow);
         AttachDragHandler(title);
+        AttachDragHandler(fiveLabel);
+        AttachDragHandler(weekLabel);
         AttachDragHandler(_statusLabel);
         AttachDragHandler(_fiveHourValue);
         AttachDragHandler(_weeklyValue);
         AttachDragHandler(_fiveHourReset);
         AttachDragHandler(_weeklyReset);
-
-        DoubleClick += (_, _) => SnapRequested?.Invoke(this, EventArgs.Empty);
 
         FormClosing += (_, e) =>
         {
@@ -156,60 +150,42 @@ internal sealed class TaskbarWidgetForm : Form
         };
     }
 
+    protected override bool ShowWithoutActivation => true;
+
     protected override CreateParams CreateParams
     {
         get
         {
-            const int CsDropShadow = 0x00020000;
+            const int WsExToolWindow = 0x00000080;
+            const int WsExNoActivate = 0x08000000;
+
             CreateParams cp = base.CreateParams;
-            cp.ClassStyle |= CsDropShadow;
+            cp.ExStyle |= WsExToolWindow | WsExNoActivate;
             return cp;
         }
     }
 
-    protected override void OnResize(EventArgs e)
+    private static Label MakeMetricLabel(string text)
     {
-        base.OnResize(e);
-        ApplyRoundedRegion();
-    }
-
-    private Control BuildMetric(string labelText, Label valueLabel)
-    {
-        var panel = new TableLayoutPanel
+        return new Label
         {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
-            Margin = Padding.Empty,
-            BackColor = BackColor
-        };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-
-        var metricLabel = new Label
-        {
-            Text = labelText,
+            Text = text,
             AutoSize = true,
             ForeColor = Color.FromArgb(161, 161, 170),
-            Font = new Font("Segoe UI Semibold", 9f),
-            Margin = new Padding(0, 7, 7, 0),
+            Font = new Font("Segoe UI Semibold", 8f),
+            Margin = new Padding(0, 4, 4, 0),
             Anchor = AnchorStyles.Left
         };
+    }
 
-        valueLabel.Text = "--";
-        valueLabel.AutoSize = true;
-        valueLabel.ForeColor = Color.White;
-        valueLabel.Font = new Font("Segoe UI Semibold", 17f);
-        valueLabel.Margin = new Padding(0, 0, 0, 0);
-        valueLabel.Anchor = AnchorStyles.Left;
-
-        panel.Controls.Add(metricLabel, 0, 0);
-        panel.Controls.Add(valueLabel, 1, 0);
-
-        AttachDragHandler(panel);
-        AttachDragHandler(metricLabel);
-
-        return panel;
+    private static void ConfigureValueLabel(Label label)
+    {
+        label.Text = "--";
+        label.AutoSize = true;
+        label.ForeColor = Color.White;
+        label.Font = new Font("Segoe UI Semibold", 12.5f);
+        label.Margin = new Padding(0, 0, 12, 0);
+        label.Anchor = AnchorStyles.Left;
     }
 
     private static void ConfigureResetLabel(Label label)
@@ -224,8 +200,7 @@ internal sealed class TaskbarWidgetForm : Form
 
     public void SetLoading()
     {
-        _statusLabel.Text = "REFRESHING";
-        _statusLabel.ForeColor = Color.FromArgb(161, 161, 170);
+        _statusLabel.ForeColor = Color.FromArgb(250, 204, 21);
     }
 
     public void SetSnapshot(UsageSnapshot snapshot)
@@ -235,8 +210,7 @@ internal sealed class TaskbarWidgetForm : Form
         _fiveHourValue.Text = FormatPercent(snapshot.FiveHour);
         _weeklyValue.Text = FormatPercent(snapshot.Weekly);
 
-        _statusLabel.Text = "LIVE";
-        _statusLabel.ForeColor = Color.FromArgb(134, 239, 172);
+        _statusLabel.ForeColor = Color.FromArgb(74, 222, 128);
 
         UpdateCountdowns();
         UpdateToolTip(snapshot);
@@ -244,8 +218,7 @@ internal sealed class TaskbarWidgetForm : Form
 
     public void SetError(string message)
     {
-        _statusLabel.Text = "ERROR";
-        _statusLabel.ForeColor = Color.FromArgb(252, 165, 165);
+        _statusLabel.ForeColor = Color.FromArgb(248, 113, 113);
         _toolTip.SetToolTip(this, message);
     }
 
@@ -260,23 +233,56 @@ internal sealed class TaskbarWidgetForm : Form
 
     public void SnapToTaskbar()
     {
-        Screen screen = Screen.FromPoint(Cursor.Position);
-        Rectangle area = screen.WorkingArea;
+        if (!TryGetTaskbarRectangle(out Rectangle taskbar))
+        {
+            Rectangle fallback = Screen.PrimaryScreen?.Bounds ?? Screen.FromPoint(Cursor.Position).Bounds;
+            taskbar = new Rectangle(fallback.Left, fallback.Bottom - 48, fallback.Width, 48);
+        }
 
-        int x = Math.Max(area.Left, area.Right - Width - 12);
-        int y = Math.Max(area.Top, area.Bottom - Height - 10);
+        int availableHeight = Math.Max(32, taskbar.Height - 6);
+        Height = Math.Min(58, availableHeight);
 
-        Location = new Point(x, y);
+        int offset = WidgetSettings.Load().TaskbarOffsetX ?? DefaultOffsetFromTaskbarLeft;
+        int x = taskbar.Left + offset;
+        int maxX = Math.Max(taskbar.Left, taskbar.Right - Width - 4);
+        x = Math.Clamp(x, taskbar.Left + 4, maxX);
+
+        int y = taskbar.Top + Math.Max(0, (taskbar.Height - Height) / 2);
+
+        SetWindowPos(
+            Handle,
+            HwndTopMost,
+            x,
+            y,
+            Width,
+            Height,
+            SwpNoActivate | SwpShowWindow);
+    }
+
+    public void KeepInsideTaskbar()
+    {
+        if (!TryGetTaskbarRectangle(out Rectangle taskbar))
+            return;
+
+        int maxX = Math.Max(taskbar.Left, taskbar.Right - Width - 4);
+        int x = Math.Clamp(Left, taskbar.Left + 4, maxX);
+        int y = taskbar.Top + Math.Max(0, (taskbar.Height - Height) / 2);
+
+        SetWindowPos(
+            Handle,
+            HwndTopMost,
+            x,
+            y,
+            Width,
+            Height,
+            SwpNoActivate | SwpShowWindow);
     }
 
     public void AllowClose() => _allowClose = true;
 
     private static string FormatPercent(UsageWindow? window)
     {
-        if (window is null)
-            return "N/A";
-
-        return $"{window.RemainingPercent:0.#}%";
+        return window is null ? "N/A" : $"{window.RemainingPercent:0.#}%";
     }
 
     private static string FormatReset(UsageWindow? window)
@@ -320,26 +326,6 @@ internal sealed class TaskbarWidgetForm : Form
         return value?.ToString("MMM d, h:mm tt") ?? "unknown";
     }
 
-    private void ApplyRoundedRegion()
-    {
-        const int radius = 16;
-        int diameter = radius * 2;
-
-        using var path = new GraphicsPath();
-        Rectangle rect = ClientRectangle;
-        rect.Width -= 1;
-        rect.Height -= 1;
-
-        path.AddArc(rect.Left, rect.Top, diameter, diameter, 180, 90);
-        path.AddArc(rect.Right - diameter, rect.Top, diameter, diameter, 270, 90);
-        path.AddArc(rect.Right - diameter, rect.Bottom - diameter, diameter, diameter, 0, 90);
-        path.AddArc(rect.Left, rect.Bottom - diameter, diameter, diameter, 90, 90);
-        path.CloseFigure();
-
-        Region?.Dispose();
-        Region = new Region(path);
-    }
-
     private void AttachDragHandler(Control control)
     {
         control.MouseDown += (_, e) =>
@@ -347,21 +333,87 @@ internal sealed class TaskbarWidgetForm : Form
             if (e.Button != MouseButtons.Left)
                 return;
 
-            ReleaseCapture();
-            SendMessage(Handle, WmNclButtonDown, HtCaption, 0);
+            _dragging = true;
+            _dragStartCursor = Cursor.Position;
+            _dragStartLocation = Location;
+        };
+
+        control.MouseMove += (_, _) =>
+        {
+            if (!_dragging)
+                return;
+
+            if (!TryGetTaskbarRectangle(out Rectangle taskbar))
+                return;
+
+            int deltaX = Cursor.Position.X - _dragStartCursor.X;
+            int candidateX = _dragStartLocation.X + deltaX;
+            int maxX = Math.Max(taskbar.Left, taskbar.Right - Width - 4);
+            int x = Math.Clamp(candidateX, taskbar.Left + 4, maxX);
+            int y = taskbar.Top + Math.Max(0, (taskbar.Height - Height) / 2);
+
+            SetWindowPos(
+                Handle,
+                HwndTopMost,
+                x,
+                y,
+                Width,
+                Height,
+                SwpNoActivate | SwpShowWindow);
+        };
+
+        control.MouseUp += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Left || !_dragging)
+                return;
+
+            _dragging = false;
+
+            if (TryGetTaskbarRectangle(out Rectangle taskbar))
+            {
+                int offset = Math.Max(0, Left - taskbar.Left);
+                WidgetSettings.Save(new WidgetSettings(offset));
+            }
         };
     }
 
-    private const int WmNclButtonDown = 0xA1;
-    private const int HtCaption = 0x2;
+    private static bool TryGetTaskbarRectangle(out Rectangle rectangle)
+    {
+        rectangle = Rectangle.Empty;
 
-    [DllImport("user32.dll")]
-    private static extern bool ReleaseCapture();
+        IntPtr taskbar = FindWindow("Shell_TrayWnd", null);
+        if (taskbar == IntPtr.Zero)
+            return false;
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr SendMessage(
+        if (!GetWindowRect(taskbar, out Rect rect))
+            return false;
+
+        rectangle = Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);
+        return rectangle.Width > 0 && rectangle.Height > 0;
+    }
+
+    private readonly record struct Rect(int Left, int Top, int Right, int Bottom);
+
+    private static readonly IntPtr HwndTopMost = new(-1);
+
+    private const uint SwpNoActivate = 0x0010;
+    private const uint SwpShowWindow = 0x0040;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hWnd, out Rect lpRect);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(
         IntPtr hWnd,
-        int msg,
-        int wParam,
-        int lParam);
+        IntPtr hWndInsertAfter,
+        int x,
+        int y,
+        int cx,
+        int cy,
+        uint flags);
 }
