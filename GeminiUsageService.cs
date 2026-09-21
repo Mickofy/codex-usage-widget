@@ -1,15 +1,12 @@
-using Microsoft.Win32.SafeHandles;
-using System.ComponentModel;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Text.RegularExpressions;
+using System.Text.Json;
 
 namespace CodexUsageWidget;
 
 internal sealed class GeminiUsageService
 {
     private static readonly TimeSpan CacheLifetime = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(20);
 
     private GeminiUsageSnapshot? _cached;
     private DateTimeOffset _cachedAt;
@@ -23,43 +20,77 @@ internal sealed class GeminiUsageService
             return _cached;
         }
 
-        await EnsureGeminiAvailableAsync();
+        string executable = FindAgyExecutable()
+            ?? throw new InvalidOperationException(
+                "Antigravity CLI is not installed. Install it, then confirm `agy --version` works.");
 
-        string output = await GeminiStatsProbe.ReadUsageAsync();
-        GeminiUsageSnapshot snapshot = ParseSnapshot(output);
+        ProcessResult result = await RunUsageAsync(executable);
 
+        if (result.ExitCode != 0)
+        {
+            string combined = $"{result.StandardOutput}\n{result.StandardError}";
+
+            if (IsSignedOut(combined))
+            {
+                throw new InvalidOperationException(
+                    "Antigravity CLI needs sign-in. Run `agy` once, sign in with Google, then refresh the widget.");
+            }
+
+            string error = FirstUsefulLine(result.StandardError)
+                ?? FirstUsefulLine(result.StandardOutput)
+                ?? $"Antigravity CLI exited with code {result.ExitCode}.";
+
+            throw new InvalidOperationException(error);
+        }
+
+        GeminiUsageSnapshot snapshot = ParseSnapshot(result.StandardOutput);
         _cached = snapshot;
         _cachedAt = DateTimeOffset.Now;
         return snapshot;
     }
 
-    private static async Task EnsureGeminiAvailableAsync()
+    private static async Task<ProcessResult> RunUsageAsync(string executable)
     {
         var psi = new ProcessStartInfo
         {
-            FileName = "cmd.exe",
-            Arguments = "/d /s /c \"gemini --version\"",
+            FileName = executable,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true
         };
 
+        psi.ArgumentList.Add("--print");
+        psi.ArgumentList.Add("/usage");
+        psi.ArgumentList.Add("--output-format");
+        psi.ArgumentList.Add("json");
+        psi.ArgumentList.Add("--log-file");
+        psi.ArgumentList.Add(Path.GetTempFileName());
+
+        // Antigravity checks for updates on normal startup. A passive meter
+        // should only read quota and should not update the CLI in the background.
+        psi.Environment["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true";
+
         using var process = new Process { StartInfo = psi };
 
         try
         {
             if (!process.Start())
-                throw new InvalidOperationException("Could not start Gemini CLI.");
+                throw new InvalidOperationException("Could not start Antigravity CLI.");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (
+            ex is System.ComponentModel.Win32Exception ||
+            ex is FileNotFoundException)
         {
             throw new InvalidOperationException(
-                "Gemini CLI is not installed. Install it, then confirm `gemini --version` works.",
+                "Antigravity CLI is not available. Confirm `agy --version` works.",
                 ex);
         }
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+
+        using var cts = new CancellationTokenSource(CommandTimeout);
 
         try
         {
@@ -75,642 +106,212 @@ internal sealed class GeminiUsageService
             {
             }
 
-            throw new TimeoutException("Timed out while checking Gemini CLI.");
+            throw new TimeoutException(
+                "Antigravity usage check timed out after 20 seconds.");
         }
 
-        if (process.ExitCode != 0)
-        {
-            string error = await process.StandardError.ReadToEndAsync();
-            throw new InvalidOperationException(
-                string.IsNullOrWhiteSpace(error)
-                    ? "Gemini CLI is not available. Confirm `gemini --version` works."
-                    : error.Trim());
-        }
+        string stdout = await stdoutTask;
+        string stderr = await stderrTask;
+
+        return new ProcessResult(process.ExitCode, stdout, stderr);
     }
 
     private static GeminiUsageSnapshot ParseSnapshot(string rawOutput)
     {
-        string output = StripTerminalSequences(rawOutput);
-
-        Match usedMatch = Regex.Match(
-            output,
-            @"(?<used>\d+(?:\.\d+)?)\s*%\s*used(?:\s*\(Limit\s+resets\s+in\s+(?<reset>[^)\r\n]+)\))?",
-            RegexOptions.IgnoreCase);
-
-        double remainingPercent;
-        string? resetText = null;
-
-        if (usedMatch.Success &&
-            double.TryParse(
-                usedMatch.Groups["used"].Value,
-                System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out double usedPercent))
+        int jsonStart = rawOutput.IndexOf('{');
+        if (jsonStart < 0)
         {
-            remainingPercent = Math.Clamp(100d - usedPercent, 0d, 100d);
-            resetText = usedMatch.Groups["reset"].Success
-                ? usedMatch.Groups["reset"].Value.Trim()
-                : null;
+            throw new InvalidOperationException(
+                "Antigravity usage returned an unexpected response.");
         }
-        else
-        {
-            Match reachedMatch = Regex.Match(
-                output,
-                @"Limit\s+reached(?:,?\s*resets\s+in\s+(?<reset>[^\r\n]+))?",
-                RegexOptions.IgnoreCase);
 
-            if (reachedMatch.Success)
+        string json = rawOutput[jsonStart..];
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+            JsonElement root = document.RootElement;
+
+            if (root.TryGetProperty("status", out JsonElement status) &&
+                !string.Equals(
+                    status.GetString(),
+                    "SUCCESS",
+                    StringComparison.OrdinalIgnoreCase))
             {
-                remainingPercent = 0d;
-                resetText = reachedMatch.Groups["reset"].Success
-                    ? reachedMatch.Groups["reset"].Value.Trim()
+                string? error = root.TryGetProperty("error", out JsonElement errorElement)
+                    ? errorElement.GetString()
                     : null;
+
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(error)
+                        ? "Antigravity usage request failed."
+                        : error);
             }
-            else
+
+            if (!TryGetGeminiBucket(root, out JsonElement bucket))
             {
-                double? modelUsedPercent =
-                    FindMostConstrainedModelUsedPercent(output);
-
-                if (modelUsedPercent is not null)
-                {
-                    remainingPercent = Math.Clamp(
-                        100d - modelUsedPercent.Value,
-                        0d,
-                        100d);
-                }
-                else
-                {
-                    // Compatibility with older Gemini CLI quota tables.
-                    Match legacyMatch = Regex.Match(
-                        output,
-                        @"gemini-[^\s│]+\s+(?:-|\d+)\s+(?<remaining>\d+(?:\.\d+)?)%\s*\(Resets\s+in\s+(?<reset>[^)]+)\)",
-                        RegexOptions.IgnoreCase);
-
-                    if (!legacyMatch.Success ||
-                        !double.TryParse(
-                            legacyMatch.Groups["remaining"].Value,
-                            System.Globalization.NumberStyles.Float,
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            out remainingPercent))
-                    {
-                        throw BuildParseException(output);
-                    }
-
-                    remainingPercent = Math.Clamp(remainingPercent, 0d, 100d);
-                    resetText = legacyMatch.Groups["reset"].Value.Trim();
-                }
+                throw new InvalidOperationException(
+                    "Gemini quota was not found in Antigravity /usage.");
             }
+
+            double remainingFraction = bucket.GetProperty("remaining_fraction").GetDouble();
+            double remainingPercent = Math.Clamp(remainingFraction * 100d, 0d, 100d);
+
+            DateTimeOffset? resetsAt = null;
+            if (remainingFraction < 1d &&
+                bucket.TryGetProperty("reset_time", out JsonElement resetElement) &&
+                resetElement.ValueKind == JsonValueKind.String &&
+                DateTimeOffset.TryParse(resetElement.GetString(), out DateTimeOffset parsedReset))
+            {
+                resetsAt = parsedReset;
+            }
+
+            return new GeminiUsageSnapshot(
+                remainingPercent,
+                RemainingRequests: null,
+                RequestLimit: null,
+                resetsAt,
+                DateTimeOffset.Now);
         }
-
-        DateTimeOffset? modelReset = FindLatestModelReset(output);
-
-        int? limit = null;
-        Match limitMatch = Regex.Match(
-            output,
-            @"Usage\s+limit:\s*(?<limit>[\d,]+)",
-            RegexOptions.IgnoreCase);
-
-        if (limitMatch.Success &&
-            int.TryParse(
-                limitMatch.Groups["limit"].Value.Replace(",", string.Empty),
-                out int parsedLimit))
+        catch (JsonException ex)
         {
-            limit = parsedLimit;
+            throw new InvalidOperationException(
+                "Antigravity usage returned invalid JSON.",
+                ex);
         }
-
-        int? remainingRequests = limit is int requestLimit
-            ? (int)Math.Round(requestLimit * remainingPercent / 100d)
-            : null;
-
-        DateTimeOffset? resetsAt =
-            ParseRelativeReset(resetText) ?? modelReset;
-
-        return new GeminiUsageSnapshot(
-            remainingPercent,
-            remainingRequests,
-            limit,
-            resetsAt,
-            DateTimeOffset.Now);
     }
 
-    private static InvalidOperationException BuildParseException(string output)
+    private static bool TryGetGeminiBucket(
+        JsonElement root,
+        out JsonElement selectedBucket)
     {
-        if (output.Contains("Sign in", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("login", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("authentication", StringComparison.OrdinalIgnoreCase))
+        selectedBucket = default;
+
+        if (!root.TryGetProperty("command", out JsonElement command) ||
+            !command.TryGetProperty("data", out JsonElement data) ||
+            !data.TryGetProperty("groups", out JsonElement groups) ||
+            groups.ValueKind != JsonValueKind.Array)
         {
-            return new InvalidOperationException(
-                "Gemini CLI needs sign-in. Open `gemini` once in a terminal, sign in, then refresh the widget.");
+            return false;
         }
 
-        return new InvalidOperationException(
-            "Gemini quota was not found. Open `gemini` once and confirm the quota indicator is visible, then refresh the widget.");
-    }
+        JsonElement? best = null;
+        double bestRemaining = double.MaxValue;
+        bool bestIsWeekly = false;
 
-    private static double? FindMostConstrainedModelUsedPercent(string output)
-    {
-        double? highestUsed = null;
-
-        foreach (Match match in Regex.Matches(
-                     output,
-                     @"(?m)^\s*(?:Pro|Flash(?:\s+Lite)?|Gemini[^\r\n]*?)\s+[^\r\n]*?(?<used>\d+(?:\.\d+)?)%\s+Resets:",
-                     RegexOptions.IgnoreCase))
+        foreach (JsonElement group in groups.EnumerateArray())
         {
-            if (!double.TryParse(
-                    match.Groups["used"].Value,
-                    System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out double used))
+            string? name = group.TryGetProperty("name", out JsonElement nameElement)
+                ? nameElement.GetString()
+                : null;
+
+            if (string.IsNullOrWhiteSpace(name) ||
+                !name.Contains("Gemini", StringComparison.OrdinalIgnoreCase) ||
+                !group.TryGetProperty("buckets", out JsonElement buckets) ||
+                buckets.ValueKind != JsonValueKind.Array)
             {
                 continue;
             }
 
-            if (highestUsed is null || used > highestUsed)
-                highestUsed = used;
-        }
-
-        return highestUsed;
-    }
-
-    private static DateTimeOffset? FindLatestModelReset(string output)
-    {
-        DateTimeOffset? latest = null;
-
-        foreach (Match match in Regex.Matches(
-                     output,
-                     @"Resets:\s*[^\r\n]*?\((?<relative>[^)]+)\)",
-                     RegexOptions.IgnoreCase))
-        {
-            DateTimeOffset? candidate =
-                ParseRelativeReset(match.Groups["relative"].Value);
-
-            if (candidate is not null &&
-                (latest is null || candidate > latest))
+            foreach (JsonElement bucket in buckets.EnumerateArray())
             {
-                latest = candidate;
+                if (bucket.TryGetProperty("disabled", out JsonElement disabled) &&
+                    disabled.ValueKind == JsonValueKind.True)
+                {
+                    continue;
+                }
+
+                if (!bucket.TryGetProperty("remaining_fraction", out JsonElement fraction) ||
+                    fraction.ValueKind != JsonValueKind.Number)
+                {
+                    continue;
+                }
+
+                double remaining = fraction.GetDouble();
+                bool isWeekly =
+                    bucket.TryGetProperty("window", out JsonElement window) &&
+                    string.Equals(
+                        window.GetString(),
+                        "weekly",
+                        StringComparison.OrdinalIgnoreCase);
+
+                if (best is null ||
+                    (isWeekly && !bestIsWeekly) ||
+                    (isWeekly == bestIsWeekly && remaining < bestRemaining))
+                {
+                    best = bucket.Clone();
+                    bestRemaining = remaining;
+                    bestIsWeekly = isWeekly;
+                }
             }
         }
 
-        return latest;
+        if (best is null)
+            return false;
+
+        selectedBucket = best.Value;
+        return true;
     }
 
-    private static DateTimeOffset? ParseRelativeReset(string? text)
+    private static string? FindAgyExecutable()
     {
-        if (string.IsNullOrWhiteSpace(text))
-            return null;
+        string localAppData =
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
-        Match match = Regex.Match(
-            text,
-            @"(?:(?<days>\d+)d)?\s*(?:(?<hours>\d+)h)?\s*(?:(?<minutes>\d+)m)?",
-            RegexOptions.IgnoreCase);
+        string installed =
+            Path.Combine(localAppData, "agy", "bin", "agy.exe");
 
-        if (!match.Success)
-            return null;
+        if (File.Exists(installed))
+            return installed;
 
-        int days = ParsePart(match, "days");
-        int hours = ParsePart(match, "hours");
-        int minutes = ParsePart(match, "minutes");
-
-        if (days == 0 && hours == 0 && minutes == 0)
-            return null;
-
-        return DateTimeOffset.Now.AddDays(days).AddHours(hours).AddMinutes(minutes);
-    }
-
-    private static int ParsePart(Match match, string group)
-    {
-        return match.Groups[group].Success &&
-               int.TryParse(match.Groups[group].Value, out int value)
-            ? value
-            : 0;
-    }
-
-    private static string StripTerminalSequences(string text)
-    {
-        text = Regex.Replace(
-            text,
-            @"\x1B\][^\x07]*(?:\x07|\x1B\\)",
-            string.Empty);
-
-        text = Regex.Replace(
-            text,
-            @"\x1B\[[0-?]*[ -/]*[@-~]",
-            string.Empty);
-
-        return text.Replace("\0", string.Empty);
-    }
-}
-
-internal static class GeminiStatsProbe
-{
-    private const uint ExtendedStartupInfoPresent = 0x00080000;
-    private const uint CreateUnicodeEnvironment = 0x00000400;
-    private const uint HandleFlagInherit = 0x00000001;
-    private const int ProcThreadAttributePseudoConsole = 0x00020016;
-
-    public static async Task<string> ReadUsageAsync()
-    {
-        IntPtr inputRead = IntPtr.Zero;
-        IntPtr inputWrite = IntPtr.Zero;
-        IntPtr outputRead = IntPtr.Zero;
-        IntPtr outputWrite = IntPtr.Zero;
-        IntPtr pseudoConsole = IntPtr.Zero;
-        IntPtr attributeList = IntPtr.Zero;
-        Process? process = null;
-
-        try
+        string? path = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrWhiteSpace(path))
         {
-            CreatePipeChecked(out inputRead, out inputWrite);
-            CreatePipeChecked(out outputRead, out outputWrite);
-
-            SetHandleInformation(inputWrite, HandleFlagInherit, 0);
-            SetHandleInformation(outputRead, HandleFlagInherit, 0);
-
-            int hr = CreatePseudoConsole(
-                new Coord(180, 60),
-                inputRead,
-                outputWrite,
-                0,
-                out pseudoConsole);
-
-            if (hr != 0)
-                Marshal.ThrowExceptionForHR(hr);
-
-            CloseHandle(inputRead);
-            inputRead = IntPtr.Zero;
-            CloseHandle(outputWrite);
-            outputWrite = IntPtr.Zero;
-
-            nuint attributeSize = 0;
-            _ = InitializeProcThreadAttributeList(
-                IntPtr.Zero,
-                1,
-                0,
-                ref attributeSize);
-
-            attributeList = Marshal.AllocHGlobal((IntPtr)attributeSize);
-
-            if (!InitializeProcThreadAttributeList(
-                    attributeList,
-                    1,
-                    0,
-                    ref attributeSize))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-            }
-
-            if (!UpdateProcThreadAttribute(
-                    attributeList,
-                    0,
-                    (IntPtr)ProcThreadAttributePseudoConsole,
-                    pseudoConsole,
-                    (nuint)IntPtr.Size,
-                    IntPtr.Zero,
-                    IntPtr.Zero))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-            }
-
-            var startupInfo = new StartupInfoEx();
-            startupInfo.StartupInfo.cb = Marshal.SizeOf<StartupInfoEx>();
-            startupInfo.lpAttributeList = attributeList;
-
-            string comSpec =
-                Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
-            var commandLine = new StringBuilder(
-                $"\"{comSpec}\" /d /s /c gemini --skip-trust");
-
-            string workingDirectory =
-                Environment.GetFolderPath(
-                    Environment.SpecialFolder.UserProfile);
-
-            if (!CreateProcessW(
-                    null,
-                    commandLine,
-                    IntPtr.Zero,
-                    IntPtr.Zero,
-                    false,
-                    ExtendedStartupInfoPresent | CreateUnicodeEnvironment,
-                    IntPtr.Zero,
-                    workingDirectory,
-                    ref startupInfo,
-                    out ProcessInformation processInfo))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-            }
-
-            CloseHandle(processInfo.hThread);
-
-            try
-            {
-                process = Process.GetProcessById(processInfo.dwProcessId);
-            }
-            finally
-            {
-                CloseHandle(processInfo.hProcess);
-            }
-
-            using var inputHandle =
-                new SafeFileHandle(inputWrite, ownsHandle: true);
-            inputWrite = IntPtr.Zero;
-
-            using var outputHandle =
-                new SafeFileHandle(outputRead, ownsHandle: true);
-            outputRead = IntPtr.Zero;
-
-            await using var inputStream =
-                new FileStream(inputHandle, FileAccess.Write, 4096, true);
-            await using var outputStream =
-                new FileStream(outputHandle, FileAccess.Read, 4096, true);
-
-            using var writer = new StreamWriter(
-                inputStream,
-                new UTF8Encoding(false),
-                1024,
-                leaveOpen: true)
-            {
-                AutoFlush = true,
-                NewLine = "\r\n"
-            };
-
-            using var reader = new StreamReader(
-                outputStream,
-                Encoding.UTF8,
-                detectEncodingFromByteOrderMarks: false,
-                bufferSize: 4096,
-                leaveOpen: true);
-
-            var output = new StringBuilder();
-            var readCts = new CancellationTokenSource();
-            Task readTask = ReadOutputAsync(reader, output, readCts.Token);
-
-            await Task.Delay(2200);
-            await writer.WriteLineAsync("/stats");
-
-            // /stats refreshes quota state. /model then renders Gemini CLI's
-            // own Model usage rows, which include reset times without sending
-            // a model prompt or consuming a request.
-            await Task.Delay(2800);
-            await writer.WriteLineAsync("/model");
-
-            DateTimeOffset deadline =
-                DateTimeOffset.Now.AddSeconds(14);
-
-            while (DateTimeOffset.Now < deadline)
-            {
-                string snapshot;
-                lock (output)
-                    snapshot = output.ToString();
-
-                if (HasQuotaOutput(snapshot))
-                    break;
-
-                if (process.HasExited)
-                    break;
-
-                await Task.Delay(250);
-            }
-
-            try
-            {
-                await writer.WriteLineAsync("/quit");
-                await Task.Delay(350);
-            }
-            catch
-            {
-            }
-
-            if (!process.HasExited)
+            foreach (string entry in path.Split(
+                         Path.PathSeparator,
+                         StringSplitOptions.RemoveEmptyEntries |
+                         StringSplitOptions.TrimEntries))
             {
                 try
                 {
-                    process.Kill(entireProcessTree: true);
+                    string candidate = Path.Combine(entry, "agy.exe");
+                    if (File.Exists(candidate))
+                        return candidate;
                 }
                 catch
                 {
                 }
             }
-
-            readCts.Cancel();
-
-            try
-            {
-                await readTask.WaitAsync(TimeSpan.FromSeconds(1));
-            }
-            catch
-            {
-            }
-
-            lock (output)
-                return output.ToString();
         }
-        catch (DllNotFoundException ex)
-        {
-            throw new InvalidOperationException(
-                "Gemini usage switching requires Windows 10 1809 or later.",
-                ex);
-        }
-        finally
-        {
-            if (process is not null)
-                process.Dispose();
 
-            if (attributeList != IntPtr.Zero)
-            {
-                DeleteProcThreadAttributeList(attributeList);
-                Marshal.FreeHGlobal(attributeList);
-            }
-
-            if (pseudoConsole != IntPtr.Zero)
-                ClosePseudoConsole(pseudoConsole);
-
-            CloseIfNeeded(inputRead);
-            CloseIfNeeded(inputWrite);
-            CloseIfNeeded(outputRead);
-            CloseIfNeeded(outputWrite);
-        }
+        return null;
     }
 
-    private static async Task ReadOutputAsync(
-        StreamReader reader,
-        StringBuilder output,
-        CancellationToken cancellationToken)
+    private static bool IsSignedOut(string text)
     {
-        var buffer = new char[2048];
-
-        try
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                int read = await reader.ReadAsync(
-                    buffer.AsMemory(0, buffer.Length),
-                    cancellationToken);
-
-                if (read == 0)
-                    break;
-
-                lock (output)
-                    output.Append(buffer, 0, read);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (ObjectDisposedException)
-        {
-        }
+        return text.Contains(
+                   "authentication required",
+                   StringComparison.OrdinalIgnoreCase) ||
+               text.Contains(
+                   "stored credentials are expired or revoked",
+                   StringComparison.OrdinalIgnoreCase) ||
+               text.Contains(
+                   "not logged into Antigravity",
+                   StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool HasQuotaOutput(string output)
+    private static string? FirstUsefulLine(string text)
     {
-        bool hasUsage =
-            output.Contains("% used", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("Limit reached", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains("Usage left", StringComparison.OrdinalIgnoreCase);
-
-        bool hasReset =
-            output.Contains("Model usage", StringComparison.OrdinalIgnoreCase) &&
-            output.Contains("Resets:", StringComparison.OrdinalIgnoreCase);
-
-        // Some auth modes do not provide reset timestamps. In that case the
-        // loop will naturally run until its short deadline and we still keep
-        // the real percentage instead of inventing a reset time.
-        return hasUsage && hasReset;
+        return text
+            .Split(
+                ['\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries |
+                StringSplitOptions.TrimEntries)
+            .FirstOrDefault();
     }
 
-    private static void CreatePipeChecked(
-        out IntPtr read,
-        out IntPtr write)
-    {
-        if (!CreatePipe(out read, out write, IntPtr.Zero, 0))
-            throw new Win32Exception(Marshal.GetLastWin32Error());
-    }
-
-    private static void CloseIfNeeded(IntPtr handle)
-    {
-        if (handle != IntPtr.Zero && handle != new IntPtr(-1))
-            CloseHandle(handle);
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Coord
-    {
-        public short X;
-        public short Y;
-
-        public Coord(short x, short y)
-        {
-            X = x;
-            Y = y;
-        }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct StartupInfo
-    {
-        public int cb;
-        public IntPtr lpReserved;
-        public IntPtr lpDesktop;
-        public IntPtr lpTitle;
-        public int dwX;
-        public int dwY;
-        public int dwXSize;
-        public int dwYSize;
-        public int dwXCountChars;
-        public int dwYCountChars;
-        public int dwFillAttribute;
-        public int dwFlags;
-        public short wShowWindow;
-        public short cbReserved2;
-        public IntPtr lpReserved2;
-        public IntPtr hStdInput;
-        public IntPtr hStdOutput;
-        public IntPtr hStdError;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct StartupInfoEx
-    {
-        public StartupInfo StartupInfo;
-        public IntPtr lpAttributeList;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ProcessInformation
-    {
-        public IntPtr hProcess;
-        public IntPtr hThread;
-        public int dwProcessId;
-        public int dwThreadId;
-    }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreatePipe(
-        out IntPtr hReadPipe,
-        out IntPtr hWritePipe,
-        IntPtr lpPipeAttributes,
-        uint nSize);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetHandleInformation(
-        IntPtr hObject,
-        uint dwMask,
-        uint dwFlags);
-
-    [DllImport("kernel32.dll")]
-    private static extern int CreatePseudoConsole(
-        Coord size,
-        IntPtr hInput,
-        IntPtr hOutput,
-        uint dwFlags,
-        out IntPtr phPC);
-
-    [DllImport("kernel32.dll")]
-    private static extern void ClosePseudoConsole(IntPtr hPC);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool InitializeProcThreadAttributeList(
-        IntPtr lpAttributeList,
-        int dwAttributeCount,
-        int dwFlags,
-        ref nuint lpSize);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool UpdateProcThreadAttribute(
-        IntPtr lpAttributeList,
-        uint dwFlags,
-        IntPtr attribute,
-        IntPtr lpValue,
-        nuint cbSize,
-        IntPtr lpPreviousValue,
-        IntPtr lpReturnSize);
-
-    [DllImport("kernel32.dll")]
-    private static extern void DeleteProcThreadAttributeList(
-        IntPtr lpAttributeList);
-
-    [DllImport(
-        "kernel32.dll",
-        CharSet = CharSet.Unicode,
-        SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateProcessW(
-        string? lpApplicationName,
-        StringBuilder lpCommandLine,
-        IntPtr lpProcessAttributes,
-        IntPtr lpThreadAttributes,
-        bool bInheritHandles,
-        uint dwCreationFlags,
-        IntPtr lpEnvironment,
-        string? lpCurrentDirectory,
-        ref StartupInfoEx lpStartupInfo,
-        out ProcessInformation lpProcessInformation);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseHandle(IntPtr hObject);
+    private sealed record ProcessResult(
+        int ExitCode,
+        string StandardOutput,
+        string StandardError);
 }
