@@ -3,17 +3,20 @@ namespace CodexUsageWidget;
 internal sealed class WidgetApplicationContext : ApplicationContext
 {
     private readonly FloatingWidgetForm _widget;
-    private readonly CodexUsageService _service = new();
+    private readonly CodexUsageService _codexService = new();
+    private readonly GeminiUsageService _geminiService = new();
     private readonly System.Windows.Forms.Timer _refreshTimer;
     private readonly System.Windows.Forms.Timer _countdownTimer;
 
     private bool _refreshing;
+    private bool _refreshAfterCurrent;
     private bool _exiting;
 
     public WidgetApplicationContext()
     {
         _widget = new FloatingWidgetForm();
-        _widget.RefreshRequested += async (_, _) => await RefreshAsync();
+        _widget.RefreshRequested += async (_, _) => await RefreshAsync(forceGemini: true);
+        _widget.ProviderSwitchRequested += async (_, _) => await SwitchProviderAsync();
         _widget.ExitRequested += (_, _) => ExitApp();
         _widget.OpenLogRequested += (_, _) => OpenLog();
 
@@ -32,30 +35,69 @@ internal sealed class WidgetApplicationContext : ApplicationContext
         _countdownTimer.Start();
 
         _widget.Show();
-        _ = RefreshAsync();
+        _ = RefreshAsync(forceGemini: true);
     }
 
-    private async Task RefreshAsync()
+    private async Task SwitchProviderAsync()
+    {
+        UsageProvider next = _widget.Provider == UsageProvider.Codex
+            ? UsageProvider.Gemini
+            : UsageProvider.Codex;
+
+        _widget.SetProvider(next);
+
+        if (_refreshing)
+        {
+            _refreshAfterCurrent = true;
+            return;
+        }
+
+        await RefreshAsync(forceGemini: true);
+    }
+
+    private async Task RefreshAsync(bool forceGemini = false)
     {
         if (_refreshing || _exiting)
             return;
 
         _refreshing = true;
+        UsageProvider provider = _widget.Provider;
         _widget.SetLoading();
 
         try
         {
-            UsageSnapshot snapshot = await _service.GetUsageAsync();
-            _widget.SetSnapshot(snapshot);
+            if (provider == UsageProvider.Codex)
+            {
+                UsageSnapshot snapshot = await _codexService.GetUsageAsync();
+
+                if (_widget.Provider == provider)
+                    _widget.SetSnapshot(snapshot);
+            }
+            else
+            {
+                GeminiUsageSnapshot snapshot =
+                    await _geminiService.GetUsageAsync(forceGemini);
+
+                if (_widget.Provider == provider)
+                    _widget.SetGeminiSnapshot(snapshot);
+            }
         }
         catch (Exception ex)
         {
-            AppLog.Write("Widget refresh failed", ex);
-            _widget.SetError(ex.Message);
+            AppLog.Write($"{provider} usage refresh failed", ex);
+
+            if (_widget.Provider == provider)
+                _widget.SetError(ex.Message);
         }
         finally
         {
             _refreshing = false;
+
+            if (_refreshAfterCurrent && !_exiting)
+            {
+                _refreshAfterCurrent = false;
+                _ = RefreshAsync(forceGemini: true);
+            }
         }
     }
 
@@ -99,7 +141,7 @@ internal sealed class WidgetApplicationContext : ApplicationContext
         _refreshTimer.Stop();
         _countdownTimer.Stop();
 
-        _service.Dispose();
+        _codexService.Dispose();
 
         _refreshTimer.Dispose();
         _countdownTimer.Dispose();
