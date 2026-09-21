@@ -65,7 +65,7 @@ internal sealed class GeminiUsageService
         psi.ArgumentList.Add("--output-format");
         psi.ArgumentList.Add("json");
         psi.ArgumentList.Add("--log-file");
-        psi.ArgumentList.Add(Path.GetTempFileName());
+        psi.ArgumentList.Add("NUL");
 
         // Antigravity checks for updates on normal startup. A passive meter
         // should only read quota and should not update the CLI in the background.
