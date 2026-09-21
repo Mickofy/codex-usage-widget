@@ -30,8 +30,23 @@ function New-AppShortcut {
 Write-Host "Installing Codex Usage Widget..." -ForegroundColor Cyan
 
 # Stop an existing copy so its files can be replaced safely.
-Get-Process -Name "CodexUsageWidget" -ErrorAction SilentlyContinue |
-    Stop-Process -Force -ErrorAction SilentlyContinue
+$runningWidget = Get-Process -Name "CodexUsageWidget" -ErrorAction SilentlyContinue
+if ($runningWidget) {
+    $runningWidget | Stop-Process -Force -ErrorAction SilentlyContinue
+
+    # Windows may keep the executable/folder locked briefly after the process
+    # exits. Wait for each process before replacing the installation directory.
+    foreach ($process in $runningWidget) {
+        try {
+            Wait-Process -Id $process.Id -Timeout 5 -ErrorAction SilentlyContinue
+        }
+        catch {
+            # Continue to the folder-removal retry below.
+        }
+    }
+
+    Start-Sleep -Milliseconds 300
+}
 
 # Build the normal Windows GUI executable using the project's existing publish flow.
 & (Join-Path $projectRoot "publish.ps1")
@@ -41,7 +56,21 @@ if (-not (Test-Path (Join-Path $publishDir "CodexUsageWidget.exe"))) {
 }
 
 if (Test-Path $installDir) {
-    Remove-Item $installDir -Recurse -Force
+    $removed = $false
+
+    for ($attempt = 1; $attempt -le 5 -and -not $removed; $attempt++) {
+        try {
+            Remove-Item $installDir -Recurse -Force
+            $removed = $true
+        }
+        catch {
+            if ($attempt -eq 5) {
+                throw
+            }
+
+            Start-Sleep -Milliseconds 500
+        }
+    }
 }
 
 New-Item -ItemType Directory -Path $installDir -Force | Out-Null
