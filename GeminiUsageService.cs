@@ -128,24 +128,37 @@ internal sealed class GeminiUsageService
             }
             else
             {
-                // Compatibility with older Gemini CLI quota tables.
-                Match legacyMatch = Regex.Match(
-                    output,
-                    @"gemini-[^\s│]+\s+(?:-|\d+)\s+(?<remaining>\d+(?:\.\d+)?)%\s*\(Resets\s+in\s+(?<reset>[^)]+)\)",
-                    RegexOptions.IgnoreCase);
+                double? modelUsedPercent =
+                    FindMostConstrainedModelUsedPercent(output);
 
-                if (!legacyMatch.Success ||
-                    !double.TryParse(
-                        legacyMatch.Groups["remaining"].Value,
-                        System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        out remainingPercent))
+                if (modelUsedPercent is not null)
                 {
-                    throw BuildParseException(output);
+                    remainingPercent = Math.Clamp(
+                        100d - modelUsedPercent.Value,
+                        0d,
+                        100d);
                 }
+                else
+                {
+                    // Compatibility with older Gemini CLI quota tables.
+                    Match legacyMatch = Regex.Match(
+                        output,
+                        @"gemini-[^\s│]+\s+(?:-|\d+)\s+(?<remaining>\d+(?:\.\d+)?)%\s*\(Resets\s+in\s+(?<reset>[^)]+)\)",
+                        RegexOptions.IgnoreCase);
 
-                remainingPercent = Math.Clamp(remainingPercent, 0d, 100d);
-                resetText = legacyMatch.Groups["reset"].Value.Trim();
+                    if (!legacyMatch.Success ||
+                        !double.TryParse(
+                            legacyMatch.Groups["remaining"].Value,
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out remainingPercent))
+                    {
+                        throw BuildParseException(output);
+                    }
+
+                    remainingPercent = Math.Clamp(remainingPercent, 0d, 100d);
+                    resetText = legacyMatch.Groups["reset"].Value.Trim();
+                }
             }
         }
 
@@ -192,6 +205,31 @@ internal sealed class GeminiUsageService
 
         return new InvalidOperationException(
             "Gemini quota was not found. Open `gemini` once and confirm the quota indicator is visible, then refresh the widget.");
+    }
+
+    private static double? FindMostConstrainedModelUsedPercent(string output)
+    {
+        double? highestUsed = null;
+
+        foreach (Match match in Regex.Matches(
+                     output,
+                     @"(?m)^\s*(?:Pro|Flash(?:\s+Lite)?|Gemini[^\r\n]*?)\s+[^\r\n]*?(?<used>\d+(?:\.\d+)?)%\s+Resets:",
+                     RegexOptions.IgnoreCase))
+        {
+            if (!double.TryParse(
+                    match.Groups["used"].Value,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out double used))
+            {
+                continue;
+            }
+
+            if (highestUsed is null || used > highestUsed)
+                highestUsed = used;
+        }
+
+        return highestUsed;
     }
 
     private static DateTimeOffset? FindLatestModelReset(string output)
