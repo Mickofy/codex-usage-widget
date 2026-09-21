@@ -2,8 +2,15 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = $PSScriptRoot
 $publishDir = Join-Path $projectRoot "bin\Release\net8.0-windows\publish"
-$installDir = Join-Path $env:LOCALAPPDATA "Programs\CodexUsageWidget"
+
+# Use immutable/versioned release folders so a stale Windows file handle on an
+# older installed copy can never block an update.
+$installRoot = Join-Path $env:LOCALAPPDATA "Programs\CodexUsageWidget"
+$releasesRoot = Join-Path $installRoot "releases"
+$releaseId = Get-Date -Format "yyyyMMdd-HHmmssfff"
+$installDir = Join-Path $releasesRoot $releaseId
 $installedExe = Join-Path $installDir "CodexUsageWidget.exe"
+
 $startMenuShortcut = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Codex Usage Widget.lnk"
 $startupShortcut = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup\Codex Usage Widget.lnk"
 
@@ -27,15 +34,6 @@ function New-AppShortcut {
     $shortcut.Save()
 }
 
-Write-Host "Installing Codex Usage Widget..." -ForegroundColor Cyan
-
-# Build first so the running widget stays available until replacement files are ready.
-& (Join-Path $projectRoot "publish.ps1")
-
-if (-not (Test-Path (Join-Path $publishDir "CodexUsageWidget.exe"))) {
-    throw "Published CodexUsageWidget.exe was not found."
-}
-
 function Get-InstalledWidgetProcesses {
     $matches = @()
 
@@ -46,11 +44,11 @@ function Get-InstalledWidgetProcesses {
             Where-Object {
                 ($_.ExecutablePath -and
                     $_.ExecutablePath.StartsWith(
-                        $installDir,
+                        $installRoot,
                         [System.StringComparison]::OrdinalIgnoreCase)) -or
                 ($_.CommandLine -and
                     $_.CommandLine.IndexOf(
-                        $installDir,
+                        $installRoot,
                         [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
             }
     }
@@ -78,8 +76,19 @@ function Get-InstalledWidgetProcesses {
     return @($ids.Keys)
 }
 
-# Stop every copy tied to the installed widget folder. This also catches a
-# framework-dependent copy if Windows hosts it under another process name.
+Write-Host "Installing Codex Usage Widget..." -ForegroundColor Cyan
+
+# Build first so a currently-running widget remains available until the new
+# release is ready.
+& (Join-Path $projectRoot "publish.ps1")
+
+if (-not (Test-Path (Join-Path $publishDir "CodexUsageWidget.exe"))) {
+    throw "Published CodexUsageWidget.exe was not found."
+}
+
+# Best-effort stop of an existing widget. Even if some unrelated Windows
+# process still holds a handle to the old install folder, the new version goes
+# into a different folder and installation can continue safely.
 $processIds = Get-InstalledWidgetProcesses
 
 foreach ($processId in $processIds) {
@@ -99,37 +108,36 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
     Start-Sleep -Milliseconds 250
 }
 
-# Give Windows Defender / shell bookkeeping a brief moment to release handles.
-Start-Sleep -Milliseconds 500
-
-if (Test-Path $installDir) {
-    $removed = $false
-
-    for ($attempt = 1; $attempt -le 12 -and -not $removed; $attempt++) {
-        try {
-            Remove-Item $installDir -Recurse -Force
-            $removed = $true
-        }
-        catch {
-            if ($attempt -eq 12) {
-                $remaining = Get-InstalledWidgetProcesses
-                if ($remaining.Count -gt 0) {
-                    throw "Could not replace the installed widget because process ID(s) $($remaining -join ', ') are still using it."
-                }
-
-                throw
-            }
-
-            Start-Sleep -Milliseconds 500
-        }
-    }
-}
-
 New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 Copy-Item (Join-Path $publishDir "*") $installDir -Recurse -Force
 
 New-AppShortcut -Path $startMenuShortcut -Target $installedExe
 New-AppShortcut -Path $startupShortcut -Target $installedExe
+
+# Remove old versioned releases only when Windows allows it. A locked legacy or
+# previous release is harmless because the shortcuts now point to this release.
+if (Test-Path $releasesRoot) {
+    Get-ChildItem $releasesRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $installDir } |
+        ForEach-Object {
+            Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+}
+
+# Best-effort cleanup of files from the original non-versioned installer.
+# Never fail an update if Windows still has one of these legacy files locked.
+foreach ($legacyName in @(
+    "CodexUsageWidget.exe",
+    "CodexUsageWidget.dll",
+    "CodexUsageWidget.deps.json",
+    "CodexUsageWidget.runtimeconfig.json",
+    "Assets"
+)) {
+    $legacyPath = Join-Path $installRoot $legacyName
+    if (Test-Path $legacyPath) {
+        Remove-Item $legacyPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 
 Write-Host ""
 Write-Host "Installed successfully." -ForegroundColor Green
