@@ -149,6 +149,8 @@ internal sealed class GeminiUsageService
             }
         }
 
+        DateTimeOffset? modelReset = FindLatestModelReset(output);
+
         int? limit = null;
         Match limitMatch = Regex.Match(
             output,
@@ -167,7 +169,8 @@ internal sealed class GeminiUsageService
             ? (int)Math.Round(requestLimit * remainingPercent / 100d)
             : null;
 
-        DateTimeOffset? resetsAt = ParseRelativeReset(resetText);
+        DateTimeOffset? resetsAt =
+            ParseRelativeReset(resetText) ?? modelReset;
 
         return new GeminiUsageSnapshot(
             remainingPercent,
@@ -188,7 +191,29 @@ internal sealed class GeminiUsageService
         }
 
         return new InvalidOperationException(
-            "Gemini quota was not found. Open `gemini`, run `/stats`, and confirm quota information is shown.");
+            "Gemini quota was not found. Open `gemini` once and confirm the quota indicator is visible, then refresh the widget.");
+    }
+
+    private static DateTimeOffset? FindLatestModelReset(string output)
+    {
+        DateTimeOffset? latest = null;
+
+        foreach (Match match in Regex.Matches(
+                     output,
+                     @"Resets:\s*[^\r\n]*?\((?<relative>[^)]+)\)",
+                     RegexOptions.IgnoreCase))
+        {
+            DateTimeOffset? candidate =
+                ParseRelativeReset(match.Groups["relative"].Value);
+
+            if (candidate is not null &&
+                (latest is null || candidate > latest))
+            {
+                latest = candidate;
+            }
+        }
+
+        return latest;
     }
 
     private static DateTimeOffset? ParseRelativeReset(string? text)
@@ -383,8 +408,12 @@ internal static class GeminiStatsProbe
 
             await Task.Delay(2200);
             await writer.WriteLineAsync("/stats");
+
+            // /stats refreshes quota state. /model then renders Gemini CLI's
+            // own Model usage rows, which include reset times without sending
+            // a model prompt or consuming a request.
             await Task.Delay(2800);
-            await writer.WriteLineAsync("/stats model");
+            await writer.WriteLineAsync("/model");
 
             DateTimeOffset deadline =
                 DateTimeOffset.Now.AddSeconds(14);
@@ -496,9 +525,19 @@ internal static class GeminiStatsProbe
 
     private static bool HasQuotaOutput(string output)
     {
-        return output.Contains("% used", StringComparison.OrdinalIgnoreCase) ||
-               output.Contains("Limit reached", StringComparison.OrdinalIgnoreCase) ||
-               output.Contains("Usage left", StringComparison.OrdinalIgnoreCase);
+        bool hasUsage =
+            output.Contains("% used", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Limit reached", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("Usage left", StringComparison.OrdinalIgnoreCase);
+
+        bool hasReset =
+            output.Contains("Model usage", StringComparison.OrdinalIgnoreCase) &&
+            output.Contains("Resets:", StringComparison.OrdinalIgnoreCase);
+
+        // Some auth modes do not provide reset timestamps. In that case the
+        // loop will naturally run until its short deadline and we still keep
+        // the real percentage instead of inventing a reset time.
+        return hasUsage && hasReset;
     }
 
     private static void CreatePipeChecked(
