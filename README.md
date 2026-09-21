@@ -1,6 +1,6 @@
 # Codex Usage Widget
 
-A lightweight Windows utility for viewing your real Codex usage limits in a small floating desktop widget.
+A lightweight Windows utility for viewing Codex and Gemini/Antigravity usage limits in a small floating desktop widget.
 
 ## Current behavior
 
@@ -8,10 +8,10 @@ The app uses a compact **floating widget** instead of a system-tray icon or task
 
 It shows:
 
-- `5H` — remaining percentage in the 5-hour window
-- `WEEK` — remaining percentage in the weekly window
-- reset countdowns
-- a small status dot for live / refreshing / error state
+- Codex: remaining percentage for the 5-hour and weekly windows
+- Gemini: the Antigravity "Gemini Models" weekly remaining quota and reset countdown
+- click the provider logo to switch between Codex and Gemini
+- the selected provider is remembered between launches
 
 The widget:
 
@@ -35,14 +35,18 @@ The widget:
 
 - Windows 10/11
 - Codex CLI installed and signed in
+- Antigravity CLI (`agy`) installed and signed in for Gemini quota
 - .NET 8 SDK for development
 
 Check:
 
 ```powershell
 codex --version
+agy --version
 dotnet --version
 ```
+
+For personal Google accounts, Google retired consumer Google-login through the legacy Gemini CLI in June 2026. Gemini usage is therefore read from Antigravity CLI using its read-only structured usage command.
 
 ## Run from source
 
@@ -61,7 +65,7 @@ Settings are stored under:
 
 ## How it works
 
-The app starts the local Codex App Server and reads rate-limit information through:
+For Codex, the app starts the local Codex App Server and reads rate-limit information through:
 
 ```text
 account/rateLimits/read
@@ -72,7 +76,15 @@ It recognizes:
 - `300` minutes as the 5-hour window
 - `10080` minutes as the weekly window
 
-Missing windows are displayed as unavailable rather than estimated.
+For Gemini, the app runs Antigravity's read-only structured quota command:
+
+```text
+agy --print /usage --output-format json
+```
+
+It selects the `Gemini Models` weekly quota bucket and reads its `remaining_fraction` and `reset_time`. The command does not start a model turn.
+
+Missing windows or quota buckets are displayed as unavailable rather than estimated.
 
 ## Publish an EXE
 
