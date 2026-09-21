@@ -338,7 +338,9 @@ internal sealed class FloatingWidgetForm : Form
         // Keep the compact layout, but add a small visual gap between the
         // metric label and the percentage column.
         RectangleF labelRect = new(62f, y, 73f, 24f);
-        RectangleF valueRect = new(142f, y - 1f, 50f, 25f);
+        RectangleF valueRect = compactValue
+            ? new RectangleF(132f, y - 1f, 60f, 25f)
+            : new RectangleF(142f, y - 1f, 50f, 25f);
 
         using var labelFormat = new StringFormat
         {
