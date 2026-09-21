@@ -212,7 +212,7 @@ internal sealed class FloatingWidgetForm : Form
         }
         else
         {
-            DrawMetricRow(graphics, "Daily", FormatPercent(_geminiSnapshot?.RemainingPercent), 13f);
+            DrawMetricRow(graphics, "Weekly", FormatPercent(_geminiSnapshot?.RemainingPercent), 13f);
             DrawMetricRow(
                 graphics,
                 "Reset",
@@ -520,8 +520,8 @@ internal sealed class FloatingWidgetForm : Form
                 ? "Loading Gemini usage…"
                 : string.Join(
                     Environment.NewLine,
-                    $"Daily Remaining: {_geminiSnapshot.RemainingPercent:0.#}%",
-                    $"Daily Reset: {FormatCountdown(_geminiSnapshot.ResetsAt)}");
+                    $"Weekly Remaining: {_geminiSnapshot.RemainingPercent:0.#}%",
+                    $"Weekly Reset: {FormatCountdown(_geminiSnapshot.ResetsAt)}");
         }
 
         _toolTip.SetToolTip(this, text);
