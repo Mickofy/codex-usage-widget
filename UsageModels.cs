@@ -13,3 +13,16 @@ internal sealed record UsageSnapshot(
     UsageWindow? FiveHour,
     UsageWindow? Weekly,
     DateTimeOffset RetrievedAt);
+
+internal enum UsageProvider
+{
+    Codex,
+    Gemini
+}
+
+internal sealed record GeminiUsageSnapshot(
+    double RemainingPercent,
+    int? RemainingRequests,
+    int? RequestLimit,
+    DateTimeOffset? ResetsAt,
+    DateTimeOffset RetrievedAt);
