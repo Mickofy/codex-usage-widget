@@ -13,7 +13,6 @@ internal sealed class FloatingWidgetForm : Form
     private const int ScreenMargin = 18;
     private const float CornerRadius = 15f;
     private const byte CardBackgroundAlpha = 230;
-    private static readonly RectangleF LogoBounds = new(12f, 17f, 42f, 42f);
 
     private static readonly Color CardBackground = Color.FromArgb(18, 22, 28);
     private static readonly Color LabelColor = Color.FromArgb(170, 173, 180);
@@ -35,8 +34,6 @@ internal sealed class FloatingWidgetForm : Form
 
     private OpenAiBlossomRenderer? _blossomRenderer;
     private UsageSnapshot? _snapshot;
-    private GeminiUsageSnapshot? _geminiSnapshot;
-    private UsageProvider _provider = UsageProvider.Codex;
     private string? _errorMessage;
     private WidgetState _state = WidgetState.Loading;
     private bool _allowClose;
@@ -44,12 +41,8 @@ internal sealed class FloatingWidgetForm : Form
     private bool _restoringSettings;
     private Point _dragStartCursor;
     private Point _dragStartLocation;
-    private bool _logoPressed;
-
-    public UsageProvider Provider => _provider;
 
     public event EventHandler? RefreshRequested;
-    public event EventHandler? ProviderSwitchRequested;
     public event EventHandler? ExitRequested;
     public event EventHandler? OpenLogRequested;
 
@@ -203,23 +196,9 @@ internal sealed class FloatingWidgetForm : Form
             graphics.FillPath(cardBrush, cardPath);
         }
 
-        DrawProviderLogo(graphics);
-
-        if (_provider == UsageProvider.Codex)
-        {
-            DrawMetricRow(graphics, "5h Usage", FormatPercent(_snapshot?.FiveHour), 13f);
-            DrawMetricRow(graphics, "Weekly", FormatPercent(_snapshot?.Weekly), 39f);
-        }
-        else
-        {
-            DrawMetricRow(graphics, "Weekly", FormatPercent(_geminiSnapshot?.RemainingPercent), 13f);
-            DrawMetricRow(
-                graphics,
-                "Reset",
-                FormatCountdown(_geminiSnapshot?.ResetsAt),
-                39f,
-                compactValue: true);
-        }
+        DrawOfficialBlossom(graphics);
+        DrawMetricRow(graphics, "5h Usage", FormatPercent(_snapshot?.FiveHour), 13f);
+        DrawMetricRow(graphics, "Weekly", FormatPercent(_snapshot?.Weekly), 39f);
 
         return bitmap;
     }
@@ -291,46 +270,18 @@ internal sealed class FloatingWidgetForm : Form
         }
     }
 
-    private void DrawProviderLogo(Graphics graphics)
+    private void DrawOfficialBlossom(Graphics graphics)
     {
-        if (_provider == UsageProvider.Codex)
-        {
-            _blossomRenderer?.Draw(
-                graphics,
-                new RectangleF(16f, 21f, 34f, 34f));
-            return;
-        }
-
-        DrawGeminiMark(graphics);
-    }
-
-    private static void DrawGeminiMark(Graphics graphics)
-    {
-        using var brush = new SolidBrush(Color.FromArgb(248, 248, 250));
-        using var path = new GraphicsPath();
-
-        PointF[] points =
-        [
-            new(33f, 19f),
-            new(37.5f, 31.5f),
-            new(50f, 38f),
-            new(37.5f, 42.5f),
-            new(33f, 56f),
-            new(28.5f, 42.5f),
-            new(16f, 38f),
-            new(28.5f, 31.5f)
-        ];
-
-        path.AddPolygon(points);
-        graphics.FillPath(brush, path);
+        _blossomRenderer?.Draw(
+            graphics,
+            new RectangleF(16f, 21f, 34f, 34f));
     }
 
     private void DrawMetricRow(
         Graphics graphics,
         string label,
         string value,
-        float y,
-        bool compactValue = false)
+        float y)
     {
         using var labelBrush = new SolidBrush(LabelColor);
         using var valueBrush = new SolidBrush(ValueColor);
@@ -338,9 +289,7 @@ internal sealed class FloatingWidgetForm : Form
         // Keep the compact layout, but add a small visual gap between the
         // metric label and the percentage column.
         RectangleF labelRect = new(62f, y, 73f, 24f);
-        RectangleF valueRect = compactValue
-            ? new RectangleF(132f, y - 1f, 60f, 25f)
-            : new RectangleF(142f, y - 1f, 50f, 25f);
+        RectangleF valueRect = new(142f, y - 1f, 50f, 25f);
 
         using var labelFormat = new StringFormat
         {
@@ -367,45 +316,22 @@ internal sealed class FloatingWidgetForm : Form
 
         graphics.DrawString(
             value,
-            compactValue ? _labelFont : _valueFont,
+            _valueFont,
             valueBrush,
             valueRect,
             valueFormat);
-    }
-
-    public void SetProvider(UsageProvider provider)
-    {
-        if (_provider == provider)
-            return;
-
-        _provider = provider;
-        _state = WidgetState.Loading;
-        _errorMessage = null;
-        SaveCurrentSettings();
-        RefreshHoverText();
-        RenderLayeredWindow();
     }
 
     public void SetLoading()
     {
         _state = WidgetState.Loading;
         _errorMessage = null;
-        RefreshHoverText();
         RenderLayeredWindow();
     }
 
     public void SetSnapshot(UsageSnapshot snapshot)
     {
         _snapshot = snapshot;
-        _errorMessage = null;
-        _state = WidgetState.Live;
-        RefreshHoverText();
-        RenderLayeredWindow();
-    }
-
-    public void SetGeminiSnapshot(GeminiUsageSnapshot snapshot)
-    {
-        _geminiSnapshot = snapshot;
         _errorMessage = null;
         _state = WidgetState.Live;
         RefreshHoverText();
@@ -420,13 +346,7 @@ internal sealed class FloatingWidgetForm : Form
         RenderLayeredWindow();
     }
 
-    public void UpdateCountdowns()
-    {
-        RefreshHoverText();
-
-        if (_provider == UsageProvider.Gemini)
-            RenderLayeredWindow();
-    }
+    public void UpdateCountdowns() => RefreshHoverText();
 
     public void AllowClose() => _allowClose = true;
 
@@ -437,15 +357,6 @@ internal sealed class FloatingWidgetForm : Form
         _restoringSettings = true;
         _alwaysOnTopItem.Checked = settings.AlwaysOnTop;
         TopMost = settings.AlwaysOnTop;
-
-        if (Enum.TryParse(
-                settings.Provider,
-                ignoreCase: true,
-                out UsageProvider savedProvider))
-        {
-            _provider = savedProvider;
-        }
-
         _restoringSettings = false;
 
         if (settings.X is int x && settings.Y is int y)
@@ -490,8 +401,7 @@ internal sealed class FloatingWidgetForm : Form
         {
             X = Left,
             Y = Top,
-            AlwaysOnTop = TopMost,
-            Provider = _provider.ToString()
+            AlwaysOnTop = TopMost
         });
     }
 
@@ -501,27 +411,18 @@ internal sealed class FloatingWidgetForm : Form
 
         if (_state == WidgetState.Error)
         {
-            string providerName =
-                _provider == UsageProvider.Codex ? "Codex" : "Gemini";
-            text = $"{providerName} usage unavailable\n{_errorMessage ?? "Unknown error"}";
+            text = $"Codex usage unavailable\n{_errorMessage ?? "Unknown error"}";
         }
-        else if (_provider == UsageProvider.Codex)
+        else if (_snapshot is null)
         {
-            text = _snapshot is null
-                ? "Loading Codex usage…"
-                : string.Join(
-                    Environment.NewLine,
-                    BuildResetLine("5h", _snapshot.FiveHour),
-                    BuildResetLine("Weekly", _snapshot.Weekly));
+            text = "Loading Codex usage…";
         }
         else
         {
-            text = _geminiSnapshot is null
-                ? "Loading Gemini usage…"
-                : string.Join(
-                    Environment.NewLine,
-                    $"Weekly Remaining: {_geminiSnapshot.RemainingPercent:0.#}%",
-                    $"Weekly Reset: {FormatCountdown(_geminiSnapshot.ResetsAt)}");
+            text = string.Join(
+                Environment.NewLine,
+                BuildResetLine("5h", _snapshot.FiveHour),
+                BuildResetLine("Weekly", _snapshot.Weekly));
         }
 
         _toolTip.SetToolTip(this, text);
@@ -564,18 +465,6 @@ internal sealed class FloatingWidgetForm : Form
             : $"{window.RemainingPercent:0.#}%";
     }
 
-    private static string FormatPercent(double? remainingPercent)
-    {
-        return remainingPercent is null
-            ? "--"
-            : $"{remainingPercent.Value:0.#}%";
-    }
-
-    private static string FormatCountdown(DateTimeOffset? resetAt)
-    {
-        return resetAt is null ? "--" : FormatCountdown(resetAt.Value);
-    }
-
     private static GraphicsPath RoundedRect(
         RectangleF bounds,
         float radius)
@@ -598,21 +487,15 @@ internal sealed class FloatingWidgetForm : Form
             return;
 
         _dragging = true;
-        _logoPressed = LogoBounds.Contains(e.Location);
         _dragStartCursor = Cursor.Position;
         _dragStartLocation = Location;
-        Cursor = _logoPressed ? Cursors.Hand : Cursors.SizeAll;
+        Cursor = Cursors.SizeAll;
     }
 
     private void DragMouseMove(object? sender, MouseEventArgs e)
     {
         if (!_dragging)
-        {
-            Cursor = LogoBounds.Contains(e.Location)
-                ? Cursors.Hand
-                : Cursors.Default;
             return;
-        }
 
         Point cursor = Cursor.Position;
         Location = new Point(
@@ -625,26 +508,7 @@ internal sealed class FloatingWidgetForm : Form
         if (e.Button != MouseButtons.Left || !_dragging)
             return;
 
-        Point cursor = Cursor.Position;
-        int movement =
-            Math.Abs(cursor.X - _dragStartCursor.X) +
-            Math.Abs(cursor.Y - _dragStartCursor.Y);
-
-        bool logoClick =
-            _logoPressed &&
-            movement <= 4 &&
-            LogoBounds.Contains(PointToClient(cursor));
-
         _dragging = false;
-        _logoPressed = false;
-
-        if (logoClick)
-        {
-            Cursor = Cursors.Hand;
-            ProviderSwitchRequested?.Invoke(this, EventArgs.Empty);
-            return;
-        }
-
         Cursor = Cursors.Default;
         Location = ClampToVisibleArea(Location);
         SaveCurrentSettings();
