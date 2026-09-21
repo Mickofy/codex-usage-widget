@@ -9,6 +9,7 @@ internal sealed class WidgetSettings
     public int? X { get; set; }
     public int? Y { get; set; }
     public bool AlwaysOnTop { get; set; } = true;
+    public string Provider { get; set; } = nameof(UsageProvider.Codex);
 
     private static string SettingsDirectory =>
         Path.Combine(
