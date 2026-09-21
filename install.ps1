@@ -86,9 +86,6 @@ foreach ($processId in $processIds) {
     Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
 }
 
-# taskkill also terminates any child process tree owned by the apphost.
-& taskkill.exe /F /T /IM CodexUsageWidget.exe 2>$null | Out-Null
-
 for ($attempt = 1; $attempt -le 20; $attempt++) {
     $remaining = Get-InstalledWidgetProcesses
     if ($remaining.Count -eq 0) {
