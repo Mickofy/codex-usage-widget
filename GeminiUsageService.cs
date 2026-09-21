@@ -378,7 +378,7 @@ internal static class GeminiStatsProbe
             string comSpec =
                 Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
             var commandLine = new StringBuilder(
-                $"\"{comSpec}\" /d /s /c gemini");
+                $"\"{comSpec}\" /d /s /c gemini --skip-trust");
 
             string workingDirectory =
                 Environment.GetFolderPath(
