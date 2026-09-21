@@ -29,42 +29,97 @@ function New-AppShortcut {
 
 Write-Host "Installing Codex Usage Widget..." -ForegroundColor Cyan
 
-# Stop an existing copy so its files can be replaced safely.
-$runningWidget = Get-Process -Name "CodexUsageWidget" -ErrorAction SilentlyContinue
-if ($runningWidget) {
-    $runningWidget | Stop-Process -Force -ErrorAction SilentlyContinue
-
-    # Windows may keep the executable/folder locked briefly after the process
-    # exits. Wait for each process before replacing the installation directory.
-    foreach ($process in $runningWidget) {
-        try {
-            Wait-Process -Id $process.Id -Timeout 5 -ErrorAction SilentlyContinue
-        }
-        catch {
-            # Continue to the folder-removal retry below.
-        }
-    }
-
-    Start-Sleep -Milliseconds 300
-}
-
-# Build the normal Windows GUI executable using the project's existing publish flow.
+# Build first so the running widget stays available until replacement files are ready.
 & (Join-Path $projectRoot "publish.ps1")
 
 if (-not (Test-Path (Join-Path $publishDir "CodexUsageWidget.exe"))) {
     throw "Published CodexUsageWidget.exe was not found."
 }
 
+function Get-InstalledWidgetProcesses {
+    $matches = @()
+
+    $matches += Get-Process -Name "CodexUsageWidget" -ErrorAction SilentlyContinue
+
+    try {
+        $matches += Get-CimInstance Win32_Process -ErrorAction Stop |
+            Where-Object {
+                ($_.ExecutablePath -and
+                    $_.ExecutablePath.StartsWith(
+                        $installDir,
+                        [System.StringComparison]::OrdinalIgnoreCase)) -or
+                ($_.CommandLine -and
+                    $_.CommandLine.IndexOf(
+                        $installDir,
+                        [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+            }
+    }
+    catch {
+        # CIM lookup is only a fallback for hosted/framework-dependent copies.
+    }
+
+    $ids = @{}
+    foreach ($process in $matches) {
+        $id = if ($process.PSObject.Properties["Id"]) {
+            $process.Id
+        }
+        elseif ($process.PSObject.Properties["ProcessId"]) {
+            $process.ProcessId
+        }
+        else {
+            $null
+        }
+
+        if ($id -and $id -ne $PID) {
+            $ids[[int]$id] = $true
+        }
+    }
+
+    return @($ids.Keys)
+}
+
+# Stop every copy tied to the installed widget folder. This also catches a
+# framework-dependent copy if Windows hosts it under another process name.
+$processIds = Get-InstalledWidgetProcesses
+
+foreach ($processId in $processIds) {
+    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+}
+
+# taskkill also terminates any child process tree owned by the apphost.
+& taskkill.exe /F /T /IM CodexUsageWidget.exe 2>$null | Out-Null
+
+for ($attempt = 1; $attempt -le 20; $attempt++) {
+    $remaining = Get-InstalledWidgetProcesses
+    if ($remaining.Count -eq 0) {
+        break
+    }
+
+    foreach ($processId in $remaining) {
+        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    }
+
+    Start-Sleep -Milliseconds 250
+}
+
+# Give Windows Defender / shell bookkeeping a brief moment to release handles.
+Start-Sleep -Milliseconds 500
+
 if (Test-Path $installDir) {
     $removed = $false
 
-    for ($attempt = 1; $attempt -le 5 -and -not $removed; $attempt++) {
+    for ($attempt = 1; $attempt -le 12 -and -not $removed; $attempt++) {
         try {
             Remove-Item $installDir -Recurse -Force
             $removed = $true
         }
         catch {
-            if ($attempt -eq 5) {
+            if ($attempt -eq 12) {
+                $remaining = Get-InstalledWidgetProcesses
+                if ($remaining.Count -gt 0) {
+                    throw "Could not replace the installed widget because process ID(s) $($remaining -join ', ') are still using it."
+                }
+
                 throw
             }
 
