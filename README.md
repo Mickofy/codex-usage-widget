@@ -1,5 +1,7 @@
 # Codex Usage Widget
 
+> **Unofficial community project.** Not affiliated with or endorsed by OpenAI. This software depends on locally installed Codex CLI interfaces that may change between Codex versions.
+
 A lightweight Windows utility for viewing your real Codex usage limits in a small floating desktop widget.
 
 ## Current behavior
@@ -43,6 +45,22 @@ Check:
 codex --version
 dotnet --version
 ```
+
+## Download for Windows
+
+**Portable build:** Download the **CodexUsageWidget-Windows-x64** artifact from a successful `main` run of [Windows build](https://github.com/Mickofy/codex-usage-widget/actions/workflows/windows-build.yml). Extract **the entire artifact folder**, not only its EXE, and launch `CodexUsageWidget.exe`.
+
+- Requires **Windows 10/11 x64**, an installed and authenticated **Codex CLI**, and the **.NET 8 Desktop Runtime**. The CI build is framework-dependent; it does not bundle the .NET runtime.
+- The portable download does not require the .NET SDK or running a PowerShell install script.
+- The downloadable app is currently **unsigned** and has no automatic updater. Verify the GitHub source and avoid bypassing Windows security protections.
+- `Install.cmd` and `install.ps1` are alternative **source-based** installers and create Start Menu **and auto-start** shortcuts. Read them before running. `uninstall.ps1` removes their installed copy and shortcuts.
+- Build validation includes a Windows compile/publish and a deterministic, offline model smoke test; it does **not** confirm that every Codex CLI release supports the app-server endpoint.
+
+## Privacy and portability
+
+The app calls the Codex CLI found on the **current user's PATH**, uses that user's existing Codex login, and writes its own settings/logs under `%LOCALAPPDATA%\\CodexUsageWidget`. It does not use the author's personal Codex account, account credentials, or home folder.
+
+Logs can contain error messages from the local Codex process; inspect and redact them before opening public issues. The app is intended for local use, not as a service to collect others' Codex authentication information.
 
 ## Run from source
 
@@ -125,3 +143,7 @@ The widget intentionally stays simple:
 - optional percentage-only compact mode
 - optional light theme
 - usage history and trend
+
+## Open source
+
+Licensed under the [MIT License](LICENSE). Contributions are welcome. Do not upload session transcripts, credentials, login files, or personal logs to public issues.

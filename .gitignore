@@ -4,3 +4,17 @@ obj/
 *.user
 *.suo
 *.log
+
+# Builds, local settings, and private data
+out/
+.artifacts/
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.key
+*.sqlite
+*.jsonl
+*.db
+*.zip

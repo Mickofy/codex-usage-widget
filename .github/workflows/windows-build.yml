@@ -1,0 +1,39 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Offline model smoke tests
+        run: dotnet run --project tests/WidgetModelSmoke/WidgetModelSmoke.csproj -c Release
+      - name: Restore Windows desktop dependencies
+        run: dotnet restore CodexUsageWidget.csproj -r win-x64
+      - name: Build Windows app
+        run: dotnet build CodexUsageWidget.csproj -c Release -r win-x64 --no-restore
+      - name: Publish portable Windows app
+        run: dotnet publish CodexUsageWidget.csproj -c Release -r win-x64 --self-contained false --no-restore -o out
+      - name: Check EXE was produced
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "out/CodexUsageWidget.exe")) { throw "CodexUsageWidget.exe not found" }
+      - name: Upload portable app
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexUsageWidget-Windows-x64
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
